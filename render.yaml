@@ -21,3 +21,5 @@ services:
         sync: false
       - key: TIKTOK_USERNAME
         sync: false
+      - key: EULER_API_KEY
+        sync: false
