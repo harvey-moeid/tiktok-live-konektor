@@ -152,7 +152,13 @@ export class TikTokService {
   }
 
   bind(c) {
-    c.on(ControlEvent.CONNECTED, (s) => {
+    // v2.5.0 documents these Webcast event names as stable string identifiers.
+    // Use the literal names so an enum/export change cannot silently disable handlers.
+    const on = (name, handler) => c.on(name, handler);
+
+    this._debug = { websocketData: 0, decodedData: 0, lastDecoded: null };
+
+    on(ControlEvent.CONNECTED, (s) => {
       this.setStatus('Connected');
       this.emit('stream', { state: 'started', roomId: s.roomId || null, username: this.username });
     });
@@ -162,10 +168,10 @@ export class TikTokService {
     });
     c.on(ControlEvent.ERROR, (e) => this.setStatus('Error', e?.message || String(e)));
 
-    c.on(WebcastEvent.CHAT, (d) => this.emit('chat', {
+    on('chat', (d) => this.emit('chat', {
       username: usernameOf(d), nickname: nicknameOf(d), message: commentOf(d)
     }));
-    c.on(WebcastEvent.GIFT, (d) => {
+    on('gift', (d) => {
       const gift = d?.giftDetails || d?.gift || d?.extendedGiftInfo || {};
       const repeatCount = numberOf(d?.repeatCount, d?.repeat_count, 1) || 1;
       const diamondCount = numberOf(d?.diamondCount, d?.diamond_count, gift?.diamondCount, gift?.diamond_count);
@@ -175,18 +181,34 @@ export class TikTokService {
         repeatCount, totalValue: diamondCount * repeatCount
       });
     });
-    c.on(WebcastEvent.LIKE, (d) => this.emit('like', {
+    on('like', (d) => this.emit('like', {
       username: usernameOf(d), nickname: nicknameOf(d),
       likeCount: numberOf(d?.likeCount, d?.like_count, d?.totalLikeCount, 1) || 1
     }));
-    c.on(WebcastEvent.ROOM_USER, (d) => this.emit('viewer', {
+    on('roomUser', (d) => this.emit('viewer', {
       viewerCount: numberOf(d?.viewerCount, d?.viewer_count, d?.roomUser?.viewerCount, d?.stats?.viewerCount, d?.stats?.viewer_count)
     }));
-    c.on(WebcastEvent.MEMBER, (d) => this.emit('member', {
+    on('member', (d) => this.emit('member', {
       username: usernameOf(d), nickname: nicknameOf(d), memberCount: numberOf(d?.memberCount, d?.member_count)
     }));
-    c.on(WebcastEvent.FOLLOW, (d) => this.emit('follow', { username: usernameOf(d), nickname: nicknameOf(d) }));
-    c.on(WebcastEvent.SHARE, (d) => this.emit('share', { username: usernameOf(d), nickname: nicknameOf(d) }));
+    on('follow', (d) => this.emit('follow', { username: usernameOf(d), nickname: nicknameOf(d) }));
+    on('share', (d) => this.emit('share', { username: usernameOf(d), nickname: nicknameOf(d) }));
+
+    // Diagnostics: prove whether the WebSocket is receiving and decoding Webcast frames.
+    // Never forward raw frames to clients because they can be very large.
+    on(ControlEvent.WEBSOCKET_DATA, () => {
+      this._debug.websocketData++;
+      if (this._debug.websocketData <= 3) {
+        console.log('[TikTok] WebSocket data received #' + this._debug.websocketData);
+      }
+    });
+    on(ControlEvent.DECODED_DATA, (d) => {
+      this._debug.decodedData++;
+      if (this._debug.decodedData <= 5) {
+        const keys = d && typeof d === 'object' ? Object.keys(d).slice(0, 20).join(',') : typeof d;
+        console.log('[TikTok] Decoded Webcast data #' + this._debug.decodedData + ' keys=' + keys);
+      }
+    });
   }
 
   async start(u, roomId = '') {
