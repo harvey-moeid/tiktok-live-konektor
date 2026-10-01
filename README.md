@@ -10,6 +10,12 @@ External WebSocket: `wss://DOMAIN/live?token=YOUR_WS_TOKEN`
 
 TikTok connector is unofficial.
 
-## Euler signing
+## TikTok signing / free mode
 
-Set `EULER_API_KEY` in the Render environment when TikTok room discovery reports `Failed to retrieve Room ID from all sources`. The connector passes this key to the Euler signing fallback without exposing it to the browser.
+The connector intentionally does **not** send `EULER_API_KEY` and does not enable `enableExtendedGiftInfo`. This keeps the normal connection path on Euler Stream's anonymous/community signing flow and avoids paid Business-only routes.
+
+Do not add an Euler API key to Render unless a paid Euler feature is intentionally required. Euler documents that signature/premium routes can require paid plans, while the TikTok Live Connector documents anonymous/community WebSocket signing with free limits.
+
+Gift events are still received through the LIVE WebSocket. Extended gift-catalog metadata (such as a guaranteed catalog name/image/cost lookup) is intentionally disabled because that lookup can hit a Business-only route.
+
+If anonymous signing itself is rejected by Euler/TikTok, the remaining options are to use a supported paid signing plan or provide a compatible self-hosted/custom signing provider through the connector's route configuration; the project does not attempt to bypass a provider paywall.
