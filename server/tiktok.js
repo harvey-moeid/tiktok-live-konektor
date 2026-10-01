@@ -191,23 +191,33 @@ export class TikTokService {
     on('member', (d) => this.emit('member', {
       username: usernameOf(d), nickname: nicknameOf(d), memberCount: numberOf(d?.memberCount, d?.member_count)
     }));
-    on('follow', (d) => this.emit('follow', { username: usernameOf(d), nickname: nicknameOf(d) }));
-    on('share', (d) => this.emit('share', { username: usernameOf(d), nickname: nicknameOf(d) }));
+    // TikTok connector exposes follow/share through the "social" message event.
+    on('social', (d) => {
+      const action = String(first(d?.displayType, d?.action, d?.socialType, '') || '').toLowerCase();
+      if (action.includes('follow')) this.emit('follow', { username: usernameOf(d), nickname: nicknameOf(d) });
+      else if (action.includes('share')) this.emit('share', { username: usernameOf(d), nickname: nicknameOf(d) });
+      else this.emit('social', { username: usernameOf(d), nickname: nicknameOf(d), action });
+    });
 
     // Diagnostics: prove whether the WebSocket is receiving and decoding Webcast frames.
     // Never forward raw frames to clients because they can be very large.
-    on(ControlEvent.WEBSOCKET_DATA, () => {
-      this._debug.websocketData++;
-      if (this._debug.websocketData <= 3) {
-        console.log('[TikTok] WebSocket data received #' + this._debug.websocketData);
-      }
+    on('websocketConnected', () => {
+      console.log('[TikTok] WebSocket connected');
     });
-    on(ControlEvent.DECODED_DATA, (d) => {
+    on('websocketData', (data) => {
+      this._debug.websocketData++;
+      const bytes = data?.byteLength ?? data?.length ?? 0;
+      console.log('[TikTok] WebSocket frame #' + this._debug.websocketData + ' bytes=' + bytes);
+    });
+    on('rawData', (messageTypeName, binary) => {
+      console.log('[TikTok] Raw Webcast message=' + String(messageTypeName) + ' bytes=' + (binary?.byteLength ?? binary?.length ?? 0));
+    });
+    on('decodedData', (eventName, decodedData) => {
       this._debug.decodedData++;
-      if (this._debug.decodedData <= 5) {
-        const keys = d && typeof d === 'object' ? Object.keys(d).slice(0, 20).join(',') : typeof d;
-        console.log('[TikTok] Decoded Webcast data #' + this._debug.decodedData + ' keys=' + keys);
-      }
+      const keys = decodedData && typeof decodedData === 'object'
+        ? Object.keys(decodedData).slice(0, 20).join(',')
+        : typeof decodedData;
+      console.log('[TikTok] Decoded event=' + String(eventName) + ' keys=' + keys);
     });
   }
 
