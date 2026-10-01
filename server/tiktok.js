@@ -166,7 +166,14 @@ export class TikTokService {
       this.setStatus('Disconnected');
       this.emit('stream', { state: 'ended', username: this.username });
     });
-    c.on(ControlEvent.ERROR, (e) => this.setStatus('Error', e?.message || String(e)));
+    c.on(ControlEvent.ERROR, (e) => {
+      const d = errorDetails(e);
+      console.error('[TikTok] Connector ERROR', JSON.stringify(d));
+      this.setStatus('Error', d.message);
+    });
+    on(ControlEvent.ENTER_ROOM, (d) => {
+      console.log('[TikTok] ENTER_ROOM received room=' + String(d?.roomId || d?.room?.roomId || 'unknown'));
+    });
 
     on('chat', (d) => this.emit('chat', {
       username: usernameOf(d), nickname: nicknameOf(d), message: commentOf(d)
@@ -209,15 +216,34 @@ export class TikTokService {
       const bytes = data?.byteLength ?? data?.length ?? 0;
       console.log('[TikTok] WebSocket frame #' + this._debug.websocketData + ' bytes=' + bytes);
     });
-    on('rawData', (messageTypeName, binary) => {
+    on(ControlEvent.RAW_DATA, (messageTypeName, binary) => {
       console.log('[TikTok] Raw Webcast message=' + String(messageTypeName) + ' bytes=' + (binary?.byteLength ?? binary?.length ?? 0));
     });
-    on('decodedData', (eventName, decodedData) => {
+    on(ControlEvent.DECODED_DATA, (eventName, decodedData) => {
       this._debug.decodedData++;
       const keys = decodedData && typeof decodedData === 'object'
         ? Object.keys(decodedData).slice(0, 20).join(',')
         : typeof decodedData;
       console.log('[TikTok] Decoded event=' + String(eventName) + ' keys=' + keys);
+    });
+
+    // The underlying WebSocket client exposes the actual protobuf decode failure.
+    // Attach to it once the connection creates the websocket client.
+    on(ControlEvent.WEBSOCKET_CONNECTED, (client) => {
+      if (client?.on) {
+        client.on('messageDecodingFailed', (err) => {
+          console.error('[TikTok] PROTOBUF DECODE FAILED:', errorDetails(err));
+        });
+        client.on('protoMessageFetchResult', (result) => {
+          const count = Array.isArray(result?.messages)
+            ? result.messages.length
+            : Array.isArray(result) ? result.length : null;
+          console.log('[TikTok] Proto message result count=' + String(count ?? 'unknown'));
+        });
+        client.on('imEnteredRoom', (room) => {
+          console.log('[TikTok] WebSocket imEnteredRoom room=' + String(room?.roomId || 'unknown'));
+        });
+      }
     });
   }
 
