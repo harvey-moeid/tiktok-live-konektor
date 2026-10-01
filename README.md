@@ -10,18 +10,25 @@ External WebSocket: `wss://DOMAIN/live?token=YOUR_WS_TOKEN`
 
 TikTok connector is unofficial.
 
-## Room ID fallback
+## Automatic Room ID discovery
 
-Jika muncul `Failed to retrieve Room ID from all sources`, dashboard sekarang menyediakan kolom **Room ID (opsional)**. Isi Room ID livestream yang sedang aktif lalu tekan **SIMPAN** dan **START LIVE**. Library TikTok Live Connector mendukung `connect(roomId)`, sehingga koneksi dapat melewati proses pencarian Room ID otomatis.
+Saat **START LIVE**, server sekarang memakai urutan:
 
-Room ID bersifat spesifik untuk sesi livestream. Jika TikTok membuat Room ID baru pada live berikutnya, nilai tersebut perlu diperbarui.
+1. Room ID manual dari dashboard (jika diisi).
+2. `tiktok-live-connector.fetchRoomId()`.
+3. Fallback langsung ke halaman `@username/live` TikTok dengan browser-like headers dan ekstraksi Room ID dari HTML.
+4. Jika Room ID ditemukan, server memanggil `connect(roomId)` sehingga proses scraping Room ID di dalam connect dilewati.
+
+Library resmi connector memang mendukung `fetchRoomId()` dan `connect(roomId)`; Room ID manual/hasil discovery hanya berlaku untuk sesi LIVE tersebut. citeturn0search0turn0search4
+
+Jika ketiga jalur gagal, kemungkinan halaman LIVE TikTok tidak dapat diakses dari jaringan/egress Render, akun belum LIVE, atau TikTok tidak lagi memberikan Room ID pada respons tersebut. Dashboard akan menampilkan detail error.
 
 ## TikTok signing / free mode
 
 The connector intentionally does **not** send `EULER_API_KEY` and does not enable `enableExtendedGiftInfo`. This avoids paid Euler Business-only routes and keeps the project from attempting to bypass a provider paywall.
 
-If anonymous signing itself is rejected by TikTok/Euler, an explicit Room ID only solves the Room ID discovery step; WebSocket signing can still be a separate blocker. In that case use a supported signing plan or a compatible self-hosted/custom signing provider.
+If anonymous signing itself is rejected by TikTok/Euler, successful Room ID discovery will not by itself solve the WebSocket signing/handshake step. In that case use a supported signing plan or a compatible self-hosted/custom signing provider.
 
 ## Diagnostics
 
-Connection failures now preserve structured error details when the connector exposes them. The dashboard shows the returned error instead of only a generic Room ID message, making Render logs and the UI more useful for troubleshooting.
+Connection failures preserve structured error details when the connector exposes them. The dashboard shows the returned error instead of only a generic Room ID message.
