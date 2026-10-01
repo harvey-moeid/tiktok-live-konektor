@@ -21,3 +21,5 @@ services:
         sync: false
       - key: TIKTOK_USERNAME
         sync: false
+      - key: TIKTOK_ROOM_ID
+        sync: false

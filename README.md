@@ -10,12 +10,18 @@ External WebSocket: `wss://DOMAIN/live?token=YOUR_WS_TOKEN`
 
 TikTok connector is unofficial.
 
+## Room ID fallback
+
+Jika muncul `Failed to retrieve Room ID from all sources`, dashboard sekarang menyediakan kolom **Room ID (opsional)**. Isi Room ID livestream yang sedang aktif lalu tekan **SIMPAN** dan **START LIVE**. Library TikTok Live Connector mendukung `connect(roomId)`, sehingga koneksi dapat melewati proses pencarian Room ID otomatis.
+
+Room ID bersifat spesifik untuk sesi livestream. Jika TikTok membuat Room ID baru pada live berikutnya, nilai tersebut perlu diperbarui.
+
 ## TikTok signing / free mode
 
-The connector intentionally does **not** send `EULER_API_KEY` and does not enable `enableExtendedGiftInfo`. This keeps the normal connection path on Euler Stream's anonymous/community signing flow and avoids paid Business-only routes.
+The connector intentionally does **not** send `EULER_API_KEY` and does not enable `enableExtendedGiftInfo`. This avoids paid Euler Business-only routes and keeps the project from attempting to bypass a provider paywall.
 
-Do not add an Euler API key to Render unless a paid Euler feature is intentionally required. Euler documents that signature/premium routes can require paid plans, while the TikTok Live Connector documents anonymous/community WebSocket signing with free limits.
+If anonymous signing itself is rejected by TikTok/Euler, an explicit Room ID only solves the Room ID discovery step; WebSocket signing can still be a separate blocker. In that case use a supported signing plan or a compatible self-hosted/custom signing provider.
 
-Gift events are still received through the LIVE WebSocket. Extended gift-catalog metadata (such as a guaranteed catalog name/image/cost lookup) is intentionally disabled because that lookup can hit a Business-only route.
+## Diagnostics
 
-If anonymous signing itself is rejected by Euler/TikTok, the remaining options are to use a supported paid signing plan or provide a compatible self-hosted/custom signing provider through the connector's route configuration; the project does not attempt to bypass a provider paywall.
+Connection failures now preserve structured error details when the connector exposes them. The dashboard shows the returned error instead of only a generic Room ID message, making Render logs and the UI more useful for troubleshooting.
