@@ -199,6 +199,19 @@ export class TikTokService {
       username: usernameOf(d), nickname: nicknameOf(d), memberCount: numberOf(d?.memberCount, d?.member_count)
     }));
     // TikTok connector exposes follow/share through the "social" message event.
+    // Newer TikTok rooms can emit additional message methods. Surface known
+    // connector events directly instead of relying on a narrow event subset.
+    for (const eventName of [
+      'emote', 'envelope', 'questionNew', 'linkMicBattle', 'linkMicArmies',
+      'liveIntro', 'subscribe', 'goalUpdate', 'roomMessage', 'captionMessage',
+      'imDelete', 'inRoomBanner', 'rankUpdate', 'pollMessage', 'rankText'
+    ]) {
+      on(eventName, (d) => {
+        console.log('[TikTok] Extended event=' + eventName);
+        this.emit(eventName, d);
+      });
+    }
+
     on('social', (d) => {
       const action = String(first(d?.displayType, d?.action, d?.socialType, '') || '').toLowerCase();
       if (action.includes('follow')) this.emit('follow', { username: usernameOf(d), nickname: nicknameOf(d) });
@@ -243,6 +256,12 @@ export class TikTokService {
             payloadBytes: m?.payload?.byteLength ?? m?.payload?.length ?? 0
           }));
           console.log('[TikTok] Proto message result count=' + messages.length + ' details=' + JSON.stringify(summary).slice(0, 4000));
+          for (const m of messages) {
+            if (!m?.decodedData && m?.method) {
+              console.warn('[TikTok] Undecoded TikTok method=' + String(m.method) +
+                ' payloadBytes=' + String(m?.payload?.byteLength ?? m?.payload?.length ?? 0));
+            }
+          }
         });
         client.on('imEnteredRoom', (room) => {
           console.log('[TikTok] WebSocket imEnteredRoom room=' + String(room?.roomId || 'unknown'));
