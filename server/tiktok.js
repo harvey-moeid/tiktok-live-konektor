@@ -235,10 +235,14 @@ export class TikTokService {
           console.error('[TikTok] PROTOBUF DECODE FAILED:', errorDetails(err));
         });
         client.on('protoMessageFetchResult', (result) => {
-          const count = Array.isArray(result?.messages)
-            ? result.messages.length
-            : Array.isArray(result) ? result.length : null;
-          console.log('[TikTok] Proto message result count=' + String(count ?? 'unknown'));
+          const messages = Array.isArray(result?.messages) ? result.messages : Array.isArray(result) ? result : [];
+          const summary = messages.map((m) => ({
+            type: m?.method || m?.type || 'unknown',
+            hasDecodedData: !!m?.decodedData,
+            decodeError: m?.decodeError ? String(m.decodeError?.message || m.decodeError) : null,
+            payloadBytes: m?.payload?.byteLength ?? m?.payload?.length ?? 0
+          }));
+          console.log('[TikTok] Proto message result count=' + messages.length + ' details=' + JSON.stringify(summary).slice(0, 4000));
         });
         client.on('imEnteredRoom', (room) => {
           console.log('[TikTok] WebSocket imEnteredRoom room=' + String(room?.roomId || 'unknown'));
@@ -257,7 +261,12 @@ export class TikTokService {
 
     console.log('[TikTok] START requested for @' + this.username + (explicitRoomId ? ' roomId=' + explicitRoomId : ''));
     this.setStatus('Connecting...'); this.running = true;
-    this.connection = new TikTokLiveConnection(this.username, { enableExtendedGiftInfo: false });
+    this.connection = new TikTokLiveConnection(this.username, {
+      enableExtendedGiftInfo: false,
+      processInitialData: true,
+      fetchRoomInfoOnConnect: false,
+      authenticateWs: false
+    });
     console.log('[TikTok] Euler signing: anonymous/community mode (no paid API key)');
     this.bind(this.connection);
 
