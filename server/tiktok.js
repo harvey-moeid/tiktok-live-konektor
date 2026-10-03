@@ -148,7 +148,7 @@ export class TikTokService {
 
     this.setStatus('Connecting...');
     this.running = true;
-    this.connection = new TikTokLiveConnection(this.username, { enableExtendedGiftInfo: false, processInitialData: true, fetchRoomInfoOnConnect: false, authenticateWs: false });
+    this.connection = new TikTokLiveConnection(this.username, { enableExtendedGiftInfo: false, processInitialData: true, fetchRoomInfoOnConnect: false, authenticateWs: false, webClientOptions: { cache: false } });
     this.bind(this.connection);
 
     try {
