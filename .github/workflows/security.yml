@@ -4,11 +4,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    - cron: "17 3 * * 1"
   workflow_dispatch:
 permissions:
   contents: read
+  issues: write
 jobs:
   audit:
     runs-on: ubuntu-latest
@@ -18,4 +17,25 @@ jobs:
         with:
           node-version: 24.x
       - run: npm install --no-audit --no-fund
-      - run: npm audit --omit=dev --audit-level=high
+      - name: Audit runtime dependencies
+        id: audit
+        run: |
+          set +e
+          npm audit --omit=dev --audit-level=high --json > audit.json
+          rc=$?
+          echo "AUDIT_EXIT=$rc"
+          cat audit.json
+          exit $rc
+        continue-on-error: true
+      - name: Publish audit report for diagnosis
+        if: steps.audit.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "Automated npm audit report for ${{ github.sha }}"
+            echo
+            cat audit.json
+          } > audit-report.md
+          gh issue create --title "security-audit-diagnostic-${{ github.run_id }}" --body-file audit-report.md
+          exit 1
