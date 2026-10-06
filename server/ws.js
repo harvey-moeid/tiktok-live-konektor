@@ -3,7 +3,8 @@ import { WebSocketServer } from 'ws';
 import { serializeEvent } from './events.js';
 
 let wss;
-let getToken = () => '';
+let getTokens = () => [];
+let isOriginAllowed = () => true;
 const clientsByIp = new Map();
 const WINDOW_MS = 60_000;
 const MAX_ATTEMPTS_PER_WINDOW = 30;
@@ -41,8 +42,9 @@ function sameToken(a, b) {
   return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-export function attachExternalWs(server, tokenProvider) {
-  getToken = tokenProvider;
+export function attachExternalWs(server, tokenProvider, originProvider = () => true) {
+  getTokens = tokenProvider;
+  isOriginAllowed = originProvider;
   wss = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 
   server.on('upgrade', (req, socket, head) => {
@@ -53,6 +55,13 @@ export function attachExternalWs(server, tokenProvider) {
     }
     if (u.pathname !== '/live') return;
 
+    const origin = String(req.headers.origin || '');
+    if (!isOriginAllowed(origin)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
     if (!allowed(req)) {
       socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: 60\r\n\r\n');
       socket.destroy();
@@ -61,9 +70,11 @@ export function attachExternalWs(server, tokenProvider) {
 
     const authHeader = String(req.headers.authorization || '');
     const bearer = authHeader.match(/^Bearer\s+(.+)$/i)?.[1] || '';
-    const supplied = bearer || u.searchParams.get('token') || '';
-    const expected = String(getToken() || '');
-    if (!sameToken(supplied, expected)) {
+    const supplied = bearer || u.searchParams.get('token') || u.searchParams.get('key') || '';
+    const expected = (Array.isArray(getTokens()) ? getTokens() : [getTokens()])
+      .map(x => String(x || ''))
+      .filter(Boolean);
+    if (!expected.some(token => sameToken(supplied, token))) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
