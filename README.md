@@ -107,6 +107,51 @@ Example event:
 }
 ```
 
+### Realtime chat, like, and gift
+
+For a consumer that only needs the three main interaction events, filter the WebSocket connection:
+
+```text
+wss://tiktok-live-konektor.onrender.com/live?key=YOUR_API_KEY&events=chat,like,gift
+```
+
+Browser example:
+
+```js
+const ws = new WebSocket(
+  'wss://tiktok-live-konektor.onrender.com/live?key=YOUR_API_KEY&events=chat,like,gift'
+);
+
+ws.onmessage = ({ data }) => {
+  const event = JSON.parse(data);
+
+  if (event.event === 'chat') {
+    console.log(event.data.nickname, event.data.message);
+  }
+
+  if (event.event === 'like') {
+    console.log(event.data.nickname, event.data.likeCount);
+  }
+
+  if (event.event === 'gift') {
+    console.log(
+      event.data.nickname,
+      event.data.giftName,
+      event.data.repeatCount,
+      event.data.totalValue
+    );
+  }
+};
+
+ws.onclose = () => {
+  console.log('TikTok realtime connection closed');
+};
+```
+
+The `events` query can contain any supported public event type. If omitted, the connection remains backward-compatible and receives all normalized external events.
+
+For public browser applications, do not treat a key embedded in frontend JavaScript as a secret. Prefer a backend/BFF in the consuming website that connects to this service and relays only the data the browser needs. `API_ALLOWED_ORIGINS` still restricts browser-origin WebSocket connections.
+
 ### Realtime WebSocket
 
 Use:
