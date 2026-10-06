@@ -1,22 +1,44 @@
+import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { serializeEvent } from './events.js';
 
 let wss;
 let getToken = () => '';
 const clientsByIp = new Map();
+const WINDOW_MS = 60_000;
+const MAX_ATTEMPTS_PER_WINDOW = 30;
+const MAX_TRACKED_IPS = 10_000;
 
 function clientIp(req) {
-  return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+  return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim() || 'unknown';
+}
+
+function pruneExpired(now) {
+  for (const [ip, state] of clientsByIp) {
+    if (now > state.resetAt) clientsByIp.delete(ip);
+  }
+  if (clientsByIp.size <= MAX_TRACKED_IPS) return;
+  for (const ip of clientsByIp.keys()) {
+    clientsByIp.delete(ip);
+    if (clientsByIp.size <= MAX_TRACKED_IPS) break;
+  }
 }
 
 function allowed(req) {
   const ip = clientIp(req);
   const now = Date.now();
-  const state = clientsByIp.get(ip) || { count: 0, resetAt: now + 60_000 };
-  if (now > state.resetAt) { state.count = 0; state.resetAt = now + 60_000; }
+  if (clientsByIp.size >= MAX_TRACKED_IPS) pruneExpired(now);
+  let state = clientsByIp.get(ip);
+  if (!state || now > state.resetAt) state = { count: 0, resetAt: now + WINDOW_MS };
   state.count += 1;
   clientsByIp.set(ip, state);
-  return state.count <= 30;
+  return state.count <= MAX_ATTEMPTS_PER_WINDOW;
+}
+
+function sameToken(a, b) {
+  const left = Buffer.from(String(a || ''));
+  const right = Buffer.from(String(b || ''));
+  return left.length > 0 && left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 export function attachExternalWs(server, tokenProvider) {
@@ -31,10 +53,17 @@ export function attachExternalWs(server, tokenProvider) {
     }
     if (u.pathname !== '/live') return;
 
+    if (!allowed(req)) {
+      socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nRetry-After: 60\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
     const authHeader = String(req.headers.authorization || '');
     const bearer = authHeader.match(/^Bearer\s+(.+)$/i)?.[1] || '';
     const supplied = bearer || u.searchParams.get('token') || '';
-    if (!supplied || supplied !== getToken() || !allowed(req)) {
+    const expected = String(getToken() || '');
+    if (!sameToken(supplied, expected)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
       socket.destroy();
       return;
@@ -53,6 +82,7 @@ export function attachExternalWs(server, tokenProvider) {
       ws.isAlive = false;
       ws.ping();
     }
+    pruneExpired(Date.now());
   }, 30_000);
   heartbeat.unref?.();
 

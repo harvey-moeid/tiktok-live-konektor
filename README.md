@@ -2,33 +2,78 @@
 
 Realtime TikTok LIVE bridge: Express + React/Vite + Socket.IO + external WebSocket + webhook retry/filter + JWT auth + Render + GitHub Actions.
 
-Run: `npm install && npm run dev`
+## Run
 
-Production: `npm install && npm run build && npm start`
+Development:
 
-External WebSocket: `wss://DOMAIN/live?token=YOUR_WS_TOKEN`
+```bash
+npm install
+npm run dev
+```
 
-TikTok connector is unofficial.
+Production:
+
+```bash
+npm install
+npm run build
+npm start
+```
+
+Health check: `GET /api/health`
+
+## Required production environment
+
+- `JWT_SECRET`: random secret, minimum 32 characters.
+- `ADMIN_USERNAME`: dashboard username.
+- `ADMIN_PASSWORD`: dashboard password used on first startup when no stored password hash exists.
+- `WS_TOKEN`: long random token for the external WebSocket.
+- `TIKTOK_USERNAME`: default TikTok username.
+
+Optional runtime controls are documented in `.env.example`, including `TIKTOK_ROOM_ID`, `MAX_FEED_EVENTS`, `MAX_EVENT_BYTES`, `TIKTOK_HTTP_TIMEOUT_MS`, `WEBHOOK_TIMEOUT_MS`, `WEBHOOK_RETRIES`, and `TIKTOK_DEBUG`.
+
+Dashboard settings are persisted to `CONFIG_FILE`. If the deployment platform uses an ephemeral filesystem, treat environment variables as the durable baseline or attach persistent storage.
+
+## External WebSocket
+
+Endpoint: `wss://DOMAIN/live`.
+
+Preferred authentication for clients that can set headers:
+
+```text
+Authorization: Bearer YOUR_WS_TOKEN
+```
+
+For browser WebSocket clients that cannot set an Authorization header, the compatibility form remains available:
+
+```text
+wss://DOMAIN/live?token=YOUR_WS_TOKEN
+```
+
+Connection attempts are rate-limited and tokens are compared using a timing-safe check.
 
 ## Automatic Room ID discovery
 
-Saat **START LIVE**, server sekarang memakai urutan:
+When **START LIVE** is requested, the server uses this order:
 
-1. Room ID manual dari dashboard (jika diisi).
+1. Manual Room ID from the dashboard, when present.
 2. `tiktok-live-connector.fetchRoomId()`.
-3. Fallback langsung ke halaman `@username/live` TikTok dengan browser-like headers dan ekstraksi Room ID dari HTML.
-4. Jika Room ID ditemukan, server memanggil `connect(roomId)` sehingga proses scraping Room ID di dalam connect dilewati.
+3. Direct fallback to the TikTok `@username/live` page using browser-like headers.
+4. `connect(roomId)` after a Room ID is resolved.
 
-Library resmi connector memang mendukung `fetchRoomId()` dan `connect(roomId)`; Room ID manual/hasil discovery hanya berlaku untuk sesi LIVE tersebut. citeturn0search0turn0search4
+If discovery fails, the account may not be LIVE, TikTok may reject the deployment network, or TikTok may have changed the page/handshake behavior. A manual Room ID can still be supplied.
 
-Jika ketiga jalur gagal, kemungkinan halaman LIVE TikTok tidak dapat diakses dari jaringan/egress Render, akun belum LIVE, atau TikTok tidak lagi memberikan Room ID pada respons tersebut. Dashboard akan menampilkan detail error.
+`tiktok-live-connector` is unofficial. The application intentionally does not provide an Euler API key and does not enable extended gift info by default.
 
-## TikTok signing / free mode
+## Runtime hardening
 
-The connector intentionally does **not** send `EULER_API_KEY` and does not enable `enableExtendedGiftInfo`. This avoids paid Euler Business-only routes and keeps the project from attempting to bypass a provider paywall.
+- Feed events are normalized and size-bounded before entering in-memory history, Socket.IO, external WebSocket, or webhook delivery.
+- `/api/state` does not include the complete event history; history is delivered separately over Socket.IO.
+- Webhooks must use public HTTPS URLs, redirects are rejected, and delivery has bounded retry/timeout behavior.
+- TikTok HTTP discovery and WebSocket handshake have bounded timeouts.
+- High-volume raw/protobuf diagnostic logging is disabled by default. Set `TIKTOK_DEBUG=true` only while troubleshooting.
+- Login and external WebSocket connection attempts have dedicated rate limits.
+- Graceful shutdown disconnects the TikTok connector before the server exits.
 
-If anonymous signing itself is rejected by TikTok/Euler, successful Room ID discovery will not by itself solve the WebSocket signing/handshake step. In that case use a supported signing plan or a compatible self-hosted/custom signing provider.
+## CI and security
 
-## Diagnostics
-
-Connection failures preserve structured error details when the connector exposes them. The dashboard shows the returned error instead of only a generic Room ID message.
+`CI` tests Node 20, 22, and 24, then builds the Vite client. `Security` runs on pushes, pull requests, manual dispatch, and a weekly schedule. High/critical runtime advisories fail the security job unless they match the single explicitly approved advisory chain in `scripts/security-audit.mjs`.
