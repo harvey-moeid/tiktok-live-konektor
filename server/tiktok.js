@@ -44,15 +44,23 @@ function commentOf(d) { return String(first(d?.comment, d?.chatMessage?.comment,
 function numberOf(...values) { for (const value of values) { const n = Number(value); if (Number.isFinite(n)) return n; } return 0; }
 
 export function extractRoomIdFromHtml(html) {
+  const raw = String(html || '');
+  const sources = [
+    raw,
+    raw.replace(/\\u0022/gi, '"').replace(/\\\"/g, '"').replace(/&quot;/gi, '"')
+  ];
   const patterns = [
     /["']roomId["']\s*[:=]\s*["']?(\d{5,30})["']?/gi,
     /["']room_id["']\s*[:=]\s*["']?(\d{5,30})["']?/gi,
     /["']roomID["']\s*[:=]\s*["']?(\d{5,30})["']?/gi,
     /["']liveRoomId["']\s*[:=]\s*["']?(\d{5,30})["']?/gi
   ];
-  for (const re of patterns) {
-    const m = re.exec(html);
-    if (m?.[1]) return m[1];
+  for (const source of sources) {
+    for (const pattern of patterns) {
+      const re = new RegExp(pattern.source, pattern.flags);
+      const m = re.exec(source);
+      if (m?.[1]) return m[1];
+    }
   }
   return '';
 }
@@ -227,13 +235,35 @@ export class TikTokService {
     this.bind(this.connection);
 
     try {
+      if (!explicitRoomId) {
+        try {
+          explicitRoomId = String(await this.connection.fetchRoomId() || '').trim();
+          if (explicitRoomId) {
+            console.log('[TikTok] Native resolver Room ID=' + explicitRoomId +
+              ' euler=' + (eulerApiKey ? 'configured' : 'anonymous'));
+          }
+        } catch (resolveError) {
+          console.warn('[TikTok] Native Room ID discovery failed:', JSON.stringify(errorDetails(resolveError)));
+        }
+
+        if (!explicitRoomId) {
+          explicitRoomId = await directHtmlRoomId(this.username);
+        }
+
+        if (!explicitRoomId) {
+          throw Error(
+            'Room ID LIVE @' + this.username +
+            ' tidak dapat ditemukan otomatis. Pastikan akun sedang LIVE; jika discovery TikTok diblokir di server cloud, gunakan EULER_API_KEY atau isi Room ID LIVE manual.'
+          );
+        }
+      }
+
       this.roomId = explicitRoomId;
       console.log('[TikTok] Connecting @' + this.username +
-        ' mode=' + (explicitRoomId ? 'manual-room' : 'auto-room') +
+        ' roomId=' + explicitRoomId +
+        ' source=' + (roomId ? 'manual' : 'resolved') +
         ' euler=' + (eulerApiKey ? 'configured' : 'anonymous'));
-      const state = explicitRoomId
-        ? await this.connection.connect(explicitRoomId)
-        : await this.connection.connect();
+      const state = await this.connection.connect(explicitRoomId);
       this.roomId = String(state?.roomId || this.connection?.roomId || explicitRoomId || '');
       return state;
     } catch (e) {
@@ -243,9 +273,16 @@ export class TikTokService {
       if (failedConnection) try { await failedConnection.disconnect(); } catch {}
       const d = errorDetails(e);
       console.error('[TikTok] CONNECT FAILED @' + this.username, JSON.stringify(d));
-      const roomResolutionFailed = /room id|retrieve room|all sources/i.test(d.message + ' ' + String(d.info || ''));
+      const diagnostics = JSON.stringify({
+        message: d.message,
+        info: d.info,
+        cause: d.cause,
+        errors: d.errors
+      });
+      const roomResolutionFailed = /room.?id|retrieve.?room|all sources|fetchroomid|user_not_found|19881007|404000/i.test(diagnostics);
       const publicMessage = roomResolutionFailed && !eulerApiKey
-        ? 'Resolver TikTok dari server cloud gagal. Tambahkan EULER_API_KEY (Community/free) di Render agar Room ID dan WebSocket LIVE dapat di-resolve otomatis.'
+        ? 'Resolver TikTok native dan fallback HTML gagal dari server cloud. Pastikan @' + this.username +
+          ' sedang LIVE; jika masih gagal, tambahkan EULER_API_KEY atau masukkan Room ID LIVE manual.'
         : d.message;
       this.setStatus('Error', publicMessage);
       if (publicMessage !== d.message) throw Error(publicMessage, { cause: e });
