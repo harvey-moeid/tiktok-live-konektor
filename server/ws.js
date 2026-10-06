@@ -9,6 +9,17 @@ const clientsByIp = new Map();
 const WINDOW_MS = 60_000;
 const MAX_ATTEMPTS_PER_WINDOW = 30;
 const MAX_TRACKED_IPS = 10_000;
+const EXTERNAL_EVENT_TYPES = new Set(['chat','like','gift','follow','share','member','viewer','stream']);
+
+export function parseEventTypes(value) {
+  const requested = String(value || '')
+    .split(',')
+    .map(x => x.trim().toLowerCase())
+    .filter(Boolean);
+  if (!requested.length) return null;
+  const filtered = requested.filter(x => EXTERNAL_EVENT_TYPES.has(x));
+  return new Set(filtered.length ? filtered : ['chat','like','gift']);
+}
 
 function clientIp(req) {
   return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim() || 'unknown';
@@ -82,6 +93,7 @@ export function attachExternalWs(server, tokenProvider, originProvider = () => t
 
     wss.handleUpgrade(req, socket, head, ws => {
       ws.isAlive = true;
+      ws.eventTypes = parseEventTypes(u.searchParams.get('events') || u.searchParams.get('types'));
       ws.on('pong', () => { ws.isAlive = true; });
       wss.emit('connection', ws, req);
     });
@@ -108,8 +120,8 @@ export function broadcast(event) {
     return;
   }
   for (const client of wss.clients) {
-    if (client.readyState === 1) {
-      try { client.send(message); } catch (e) { console.warn('[ws] Send failed:', e?.message || String(e)); }
-    }
+    if (client.readyState !== 1) continue;
+    if (client.eventTypes && !client.eventTypes.has(String(event?.event || '').toLowerCase())) continue;
+    try { client.send(message); } catch (e) { console.warn('[ws] Send failed:', e?.message || String(e)); }
   }
 }
