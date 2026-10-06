@@ -15,6 +15,10 @@ services:
         generateValue: true
       - key: WS_TOKEN
         generateValue: true
+      - key: API_KEY
+        generateValue: true
+      - key: API_ALLOWED_ORIGINS
+        sync: false
       - key: MAX_EVENT_BYTES
         value: 65536
       - key: TIKTOK_HTTP_TIMEOUT_MS
