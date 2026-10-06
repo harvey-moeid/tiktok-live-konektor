@@ -155,11 +155,14 @@ export class TikTokService {
       const gift = d?.giftDetails || d?.gift || d?.extendedGiftInfo || {};
       const repeatCount = numberOf(d?.repeatCount, d?.repeat_count, 1) || 1;
       const diamondCount = numberOf(d?.diamondCount, d?.diamond_count, gift?.diamondCount, gift?.diamond_count);
+      const giftType = numberOf(d?.giftType, d?.gift_type, gift?.giftType, gift?.gift_type);
       this.emit('gift', {
         username: usernameOf(d), nickname: nicknameOf(d),
         giftName: String(first(d?.giftName, gift?.giftName, d?.extendedGiftInfo?.name) || 'Unknown'),
         repeatCount,
         repeatEnd: Boolean(d?.repeatEnd ?? d?.repeat_end),
+        giftType,
+        streakable: giftType === 1,
         diamondCount,
         totalValue: diamondCount * repeatCount
       });
