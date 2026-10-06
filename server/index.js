@@ -230,25 +230,7 @@ app.use(express.static(dist));
 app.get(/.*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
 
 const port = Number(process.env.PORT || 10000);
-const autoStartLive = /^(1|true|yes|on)$/i.test(String(process.env.AUTO_START_LIVE || ''));
-server.listen(port, '0.0.0.0', () => {
-  console.log(`TikTok Live Konektor listening on ${port}`);
-  if (!autoStartLive) return;
-  const username = String(process.env.TIKTOK_USERNAME || getConfig().tiktokUsername || '').replace(/^@/, '').trim();
-  const roomId = String(process.env.TIKTOK_ROOM_ID || getConfig().tiktokRoomId || '').trim();
-  if (!username) return;
-  setTimeout(() => {
-    const run = operation.then(async () => {
-      if (['Connecting...', 'Connected', 'Stopping'].includes(state.status)) return safe();
-      console.log('[auto-live] Starting @' + username + (roomId ? ' roomId=' + roomId : ' with automatic room discovery'));
-      updateConfig({ tiktokUsername: username, tiktokRoomId: roomId });
-      await tiktok.start(username, roomId);
-      return safe();
-    });
-    operation = run.catch(() => undefined);
-    run.catch(e => console.warn('[auto-live] Start failed:', e?.message || String(e)));
-  }, 1500).unref?.();
-});
+server.listen(port, '0.0.0.0', () => console.log(`TikTok Live Konektor listening on ${port}`));
 
 let shuttingDown = false;
 async function shutdown(signal) {
