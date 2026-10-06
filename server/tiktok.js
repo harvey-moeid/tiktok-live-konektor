@@ -31,7 +31,14 @@ function errorDetails(e) {
 }
 function first(...values) { return values.find(v => v !== undefined && v !== null && String(v).trim() !== ''); }
 function userOf(d) { return d?.user || d?.memberMessage?.user || d?.chatMessage?.user || d?.likeMessage?.user || d?.giftMessage?.user || d?.followMessage?.user || d?.shareMessage?.user || {}; }
-function usernameOf(d) { const u = userOf(d); return String(first(d?.uniqueId, u?.uniqueId, d?.unique_id, u?.unique_id, d?.username, u?.username) || 'unknown'); }
+function usernameOf(d) {
+  const u = userOf(d);
+  return String(first(
+    d?.uniqueId, u?.uniqueId, d?.unique_id, u?.unique_id,
+    d?.username, u?.username, d?.userName, u?.userName,
+    d?.nickname, u?.nickname, d?.user?.nickname
+  ) || 'Penonton TikTok');
+}
 function nicknameOf(d) { const u = userOf(d); return String(first(d?.nickname, u?.nickname, d?.user?.nickname) || ''); }
 function commentOf(d) { return String(first(d?.comment, d?.chatMessage?.comment, d?.message, d?.text, d?.content) || ''); }
 function numberOf(...values) { for (const value of values) { const n = Number(value); if (Number.isFinite(n)) return n; } return 0; }
