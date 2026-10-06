@@ -12,6 +12,7 @@ import { dispatchWebhook, normalizeWebhooks } from './webhooks.js';
 import { attachExternalWs } from './ws.js';
 import { TikTokService } from './tiktok.js';
 import { normalizeEvent } from './events.js';
+import { apiAuth, externalCors, isAllowedWsOrigin } from './api-auth.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'client', 'dist');
@@ -36,6 +37,8 @@ const loginLimiter = rateLimit({
 const state = {
   status: 'Disconnected',
   error: null,
+  roomId: null,
+  lastEventAt: null,
   events: [],
   stats: { chat: 0, gifts: 0, giftCoins: 0, likes: 0, follows: 0, peakViewers: 0, viewerCount: 0, topGifter: [] }
 };
@@ -51,7 +54,7 @@ function safe() {
   return {
     ...snapshot,
     username: getConfig().tiktokUsername,
-    roomId: getConfig().tiktokRoomId || null,
+    roomId: state.roomId || getConfig().tiktokRoomId || null,
     running: ['Connected', 'Connecting...'].includes(state.status)
   };
 }
@@ -90,7 +93,10 @@ function handle(event) {
     return;
   }
   if (!p || typeof p !== 'object') return;
+  if (p.roomId) state.roomId = p.roomId;
+  state.lastEventAt = p.timestamp || new Date().toISOString();
   if (p.event === 'stream' && p.data?.state === 'started') resetStats();
+  if (p.event === 'stream' && p.data?.state === 'ended') state.roomId = null;
   if (p.event === 'chat') state.stats.chat++;
   if (p.event === 'gift') addGift(p.data || {});
   if (p.event === 'like') state.stats.likes += Math.max(Number(p.data?.likeCount) || 1, 1);
@@ -108,9 +114,48 @@ function handle(event) {
 }
 
 const tiktok = new TikTokService({ emitEvent: handle, setStatus });
-attachExternalWs(server, () => getConfig().wsToken);
+attachExternalWs(server, () => [process.env.API_KEY || '', getConfig().wsToken], isAllowedWsOrigin);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, status: state.status }));
+
+// External read-only API for other applications.
+app.use('/api/v1', externalCors);
+app.options('/api/v1/*splat', externalCors);
+app.get('/api/v1/status', apiAuth, (req, res) => {
+  const snapshot = safe();
+  res.json({
+    ok: true,
+    status: snapshot.status,
+    running: snapshot.running,
+    username: snapshot.username,
+    roomId: snapshot.roomId,
+    lastEventAt: state.lastEventAt,
+    stats: snapshot.stats
+  });
+});
+app.get('/api/v1/events', apiAuth, (req, res) => {
+  const allowedTypes = new Set(['chat','like','gift','follow','share','member','viewer','stream']);
+  const requested = String(req.query.type || '').split(',').map(x => x.trim()).filter(Boolean);
+  const types = requested.length ? new Set(requested.filter(x => allowedTypes.has(x))) : allowedTypes;
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const before = String(req.query.before || '').trim();
+  let items = state.events.filter(x => types.has(x.event));
+  if (before) {
+    const cutoff = Date.parse(before);
+    if (Number.isFinite(cutoff)) items = items.filter(x => Date.parse(x.timestamp) < cutoff);
+  }
+  res.json({
+    ok: true,
+    count: Math.min(items.length, limit),
+    events: items.slice(-limit).reverse()
+  });
+});
+app.get('/api/v1/stats', apiAuth, (req, res) => res.json({
+  ok: true,
+  username: getConfig().tiktokUsername,
+  roomId: state.roomId || getConfig().tiktokRoomId || null,
+  stats: state.stats
+}));
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const token = await login(String(req.body?.username || ''), String(req.body?.password || ''));
   if (!token) return res.status(401).json({ error: 'Username atau password salah.' });
