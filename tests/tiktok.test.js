@@ -13,3 +13,7 @@ test('extracts room_id variant', () => {
 test('does not accept short numeric ids', () => {
   assert.equal(extractRoomIdFromHtml('{"roomId":"1234"}'), '');
 });
+
+test('does not mistake a generic object id for a LIVE room id', () => {
+  assert.equal(extractRoomIdFromHtml('{"id":"7499912345678901234","uniqueId":"streamer"}'), '');
+});
