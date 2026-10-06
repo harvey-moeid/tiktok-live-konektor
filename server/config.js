@@ -19,6 +19,15 @@ try {
   console.warn('[config] Could not load config file:', e?.message || String(e));
 }
 
+// Deployment environment is the durable baseline. A stale runtime config must not
+// silently override the configured default LIVE account after a redeploy.
+if (String(process.env.TIKTOK_USERNAME || '').trim()) {
+  config.tiktokUsername = String(process.env.TIKTOK_USERNAME).replace(/^@/, '').trim();
+}
+if (String(process.env.TIKTOK_ROOM_ID || '').trim()) {
+  config.tiktokRoomId = String(process.env.TIKTOK_ROOM_ID).trim();
+}
+
 export function getConfig() { return structuredClone(config); }
 
 export function updateConfig(patch) {
