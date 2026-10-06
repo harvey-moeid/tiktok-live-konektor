@@ -30,6 +30,7 @@ Health check: `GET /api/health`
 - `ADMIN_PASSWORD`: dashboard password used on first startup when no stored password hash exists.
 - `WS_TOKEN`: long random token for the external WebSocket.
 - `TIKTOK_USERNAME`: default TikTok username.
+- `EULER_API_KEY`: strongly recommended on cloud hosts for reliable Room ID resolution/signing; a Community key is sufficient for normal use.
 
 Optional runtime controls are documented in `.env.example`, including `TIKTOK_ROOM_ID`, `MAX_FEED_EVENTS`, `MAX_EVENT_BYTES`, `TIKTOK_HTTP_TIMEOUT_MS`, `WEBHOOK_TIMEOUT_MS`, `WEBHOOK_RETRIES`, and `TIKTOK_DEBUG`.
 
@@ -55,16 +56,16 @@ Connection attempts are rate-limited and tokens are compared using a timing-safe
 
 ## Automatic Room ID discovery
 
-When **START LIVE** is requested, the server uses this order:
+When **START LIVE** is requested, the server delegates discovery to `tiktok-live-connector` v2.5:
 
-1. Manual Room ID from the dashboard, when present.
-2. `tiktok-live-connector.fetchRoomId()`.
-3. Direct fallback to the TikTok `@username/live` page using browser-like headers.
-4. `connect(roomId)` after a Room ID is resolved.
+1. A manual Room ID from the dashboard is used when present.
+2. Otherwise `connect()` resolves the Room ID from the TikTok username using the connector's composite resolver.
+3. If `EULER_API_KEY` is configured, it is passed as `signApiKey` so the connector can use Euler Stream for reliable cloud-hosted resolution/signing.
+4. `fetchRoomInfoOnConnect` remains enabled so a connection is accepted only for a valid LIVE room.
 
-If discovery fails, the account may not be LIVE, TikTok may reject the deployment network, or TikTok may have changed the page/handshake behavior. A manual Room ID can still be supplied.
+On datacenter/cloud IPs, TikTok HTML/API discovery can return a normal page without usable LIVE metadata. In that case configure `EULER_API_KEY` rather than guessing a generic numeric TikTok ID.
 
-`tiktok-live-connector` is unofficial. The application intentionally does not provide an Euler API key and does not enable extended gift info by default.
+`tiktok-live-connector` is unofficial. Extended gift info remains disabled by default.
 
 ## Runtime hardening
 
