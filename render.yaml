@@ -29,3 +29,5 @@ services:
         sync: false
       - key: TIKTOK_ROOM_ID
         sync: false
+      - key: EULER_API_KEY
+        sync: false
