@@ -81,11 +81,11 @@ function Stat({label,value,sub}){
 }
 
 function Dashboard({logout}){
-  const[s,setS]=useState(),[c,setC]=useState(),[integration,setIntegration]=useState(null),[events,setEvents]=useState([]),[f,setF]=useState('all'),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
+  const[s,setS]=useState(),[c,setC]=useState(),[events,setEvents]=useState([]),[f,setF]=useState('all'),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
   useEffect(()=>{
     let mounted=true;
     api('/api/state').then(x=>mounted&&setS(x)).catch(logout);
-    api('/api/config').then(x=>mounted&&setC(x)).catch(()=>{});api('/api/integration').then(x=>mounted&&setIntegration(x)).catch(()=>{});
+    api('/api/config').then(x=>mounted&&setC(x)).catch(()=>{});
     const socket=io({path:'/socket.io',withCredentials:true,reconnection:true,reconnectionAttempts:Infinity});
     socket.on('state',x=>setS(x));
     socket.on('status',x=>setS(x));
@@ -138,15 +138,6 @@ function Dashboard({logout}){
           <small className="hint">Biarkan kosong bila resolver otomatis aktif.</small>
           <div className="buttons"><button className="secondary" onClick={save}disabled={busy}>Simpan</button>{s.running?<button className="danger" onClick={stop}disabled={busy}>Stop LIVE</button>:<button className="primary" onClick={start}disabled={busy}>{busy?'Menghubungkan…':'Start LIVE'}</button>}</div>
           {notice&&<div className="notice">{notice}</div>}{s.error&&<div className="error-detail">{s.error}</div>}
-        </div>
-
-        <div className="panel connection">
-          <div className="panel-title"><div><h3>API Integrasi</h3><p>Untuk web atau aplikasi lain.</p></div></div>
-          <label>Base URL</label><input readOnly value={integration?.baseUrl||''}/>
-          <label>API Key</label><input readOnly value={integration?.apiKey||''} onFocus={e=>e.currentTarget.select()}/>
-          <small className="hint">REST: /api/v1/status · /api/v1/events · /api/v1/stats</small>
-          <small className="hint">Realtime: wss://HOST/live?key=API_KEY</small>
-          {integration?.allowedOrigins?.length? <small className="hint">Origin: {integration.allowedOrigins.join(', ')}</small>:<small className="hint">Browser lintas domain belum diizinkan. Atur API_ALLOWED_ORIGINS di Render.</small>}
         </div>
 
         <div className="stats-grid">
