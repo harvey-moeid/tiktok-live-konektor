@@ -8,14 +8,15 @@ import rateLimit from 'express-rate-limit';
 import { Server as SocketIO } from 'socket.io';
 import { getConfig, getSafeConfig, updateConfig } from './config.js';
 import { login, verify, setPassword } from './auth.js';
-import { dispatchWebhook } from './webhooks.js';
+import { dispatchWebhook, normalizeWebhooks } from './webhooks.js';
 import { attachExternalWs } from './ws.js';
 import { TikTokService } from './tiktok.js';
-import { safeJsonValue } from './events.js';
+import { normalizeEvent } from './events.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'client', 'dist');
 const app = express();
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 const io = new SocketIO(server, { path: '/socket.io', maxHttpBufferSize: 256 * 1024 });
 
@@ -23,6 +24,14 @@ app.use(helmet({ crossOriginEmbedderPolicy: false }));
 app.use(express.json({ limit: '64kb' }));
 app.use(cookieParser());
 app.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true, legacyHeaders: false }));
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60_000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  message: { error: 'Terlalu banyak percobaan login. Coba lagi beberapa saat.' }
+});
 
 const state = {
   status: 'Disconnected',
@@ -38,8 +47,9 @@ function auth(req, res, next) {
   catch { res.status(401).json({ error: 'Unauthorized' }); }
 }
 function safe() {
+  const { events: _events, ...snapshot } = state;
   return {
-    ...state,
+    ...snapshot,
     username: getConfig().tiktokUsername,
     roomId: getConfig().tiktokRoomId || null,
     running: ['Connected', 'Connecting...'].includes(state.status)
@@ -73,12 +83,17 @@ function addGift(d) {
   state.stats.topGifter = state.stats.topGifter.slice(0, 10);
 }
 function handle(event) {
-  const p = safeJsonValue(event);
+  let p;
+  try { p = normalizeEvent(event); }
+  catch (e) {
+    console.warn('[event] Dropped invalid event:', e?.message || String(e));
+    return;
+  }
   if (!p || typeof p !== 'object') return;
   if (p.event === 'stream' && p.data?.state === 'started') resetStats();
   if (p.event === 'chat') state.stats.chat++;
   if (p.event === 'gift') addGift(p.data || {});
-  if (p.event === 'like') state.stats.likes += Number(p.data?.likeCount) || 1;
+  if (p.event === 'like') state.stats.likes += Math.max(Number(p.data?.likeCount) || 1, 1);
   if (p.event === 'follow') state.stats.follows++;
   if (p.event === 'viewer') {
     state.stats.viewerCount = Number(p.data?.viewerCount) || 0;
@@ -96,13 +111,16 @@ const tiktok = new TikTokService({ emitEvent: handle, setStatus });
 attachExternalWs(server, () => getConfig().wsToken);
 
 app.get('/api/health', (_, res) => res.json({ ok: true, status: state.status }));
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const token = await login(String(req.body?.username || ''), String(req.body?.password || ''));
   if (!token) return res.status(401).json({ error: 'Username atau password salah.' });
   res.cookie('tlk_session', token, { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 43_200_000, path: '/' });
   res.json({ ok: true });
 });
-app.post('/api/auth/logout', auth, (_, res) => { res.clearCookie('tlk_session', { path: '/' }); res.json({ ok: true }); });
+app.post('/api/auth/logout', auth, (_, res) => {
+  res.clearCookie('tlk_session', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/' });
+  res.json({ ok: true });
+});
 app.get('/api/auth/me', auth, (_, res) => res.json({ ok: true }));
 app.get('/api/state', auth, (_, res) => res.json(safe()));
 app.get('/api/config', auth, (_, res) => res.json(getSafeConfig()));
@@ -112,9 +130,13 @@ app.put('/api/config', auth, (req, res) => {
   const roomId = String(body.tiktokRoomId || '').trim();
   if (username && !/^[A-Za-z0-9._-]{1,64}$/.test(username)) return res.status(400).json({ error: 'Username TikTok tidak valid.' });
   if (roomId && !/^\d{5,30}$/.test(roomId)) return res.status(400).json({ error: 'Room ID TikTok harus berupa angka.' });
-  if (Array.isArray(body.webhooks) && body.webhooks.length > 20) return res.status(400).json({ error: 'Maksimal 20 webhook.' });
-  const webhooks = Array.isArray(body.webhooks) ? body.webhooks.slice(0, 20) : getConfig().webhooks;
-  return res.json(getSafeConfig(updateConfig({ tiktokUsername: username, tiktokRoomId: roomId, webhooks })));
+  let webhooks = getConfig().webhooks;
+  if (Object.hasOwn(body, 'webhooks')) {
+    try { webhooks = normalizeWebhooks(body.webhooks); }
+    catch (e) { return res.status(400).json({ error: e.message }); }
+  }
+  updateConfig({ tiktokUsername: username, tiktokRoomId: roomId, webhooks });
+  return res.json(getSafeConfig());
 });
 app.post('/api/auth/password', auth, async (req, res) => {
   try { await setPassword(String(req.body?.password || '')); res.json({ ok: true }); }
@@ -145,6 +167,7 @@ app.post('/api/live/stop', auth, async (_, res) => {
   operation = run.catch(() => undefined);
   try { res.json(await run); } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
 io.use((socket, next) => {
   try {
     const cookie = String(socket.handshake.headers.cookie || '').match(/(?:^|;\s*)tlk_session=([^;]+)/)?.[1];
@@ -156,6 +179,23 @@ io.on('connection', socket => {
   socket.emit('state', safe());
   socket.emit('history', state.events);
 });
+
+app.use('/api', (_, res) => res.status(404).json({ error: 'API endpoint tidak ditemukan.' }));
 app.use(express.static(dist));
 app.get(/.*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
-server.listen(Number(process.env.PORT || 10000), '0.0.0.0', () => console.log('TikTok Live Konektor listening'));
+
+const port = Number(process.env.PORT || 10000);
+server.listen(port, '0.0.0.0', () => console.log(`TikTok Live Konektor listening on ${port}`));
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] ${signal}`);
+  try { await tiktok.stop(); } catch (e) { console.warn('[shutdown] TikTok disconnect failed:', e?.message || String(e)); }
+  server.close(() => process.exit(0));
+  const timer = setTimeout(() => process.exit(1), 10_000);
+  timer.unref?.();
+}
+process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
+process.once('SIGINT', () => { void shutdown('SIGINT'); });

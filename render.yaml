@@ -3,7 +3,7 @@ services:
     name: tiktok-live-konektor
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
+    buildCommand: npm install --no-audit --no-fund && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
@@ -15,6 +15,12 @@ services:
         generateValue: true
       - key: WS_TOKEN
         generateValue: true
+      - key: MAX_EVENT_BYTES
+        value: 65536
+      - key: TIKTOK_HTTP_TIMEOUT_MS
+        value: 10000
+      - key: TIKTOK_DEBUG
+        value: "false"
       - key: ADMIN_USERNAME
         sync: false
       - key: ADMIN_PASSWORD
