@@ -66,6 +66,7 @@ export class TikTokService {
     this.running = false;
     this.username = '';
     this.roomId = '';
+    this.streamActive = false;
   }
 
   emit(type, data) {
@@ -74,12 +75,19 @@ export class TikTokService {
     broadcast(event);
   }
 
+  emitStreamEnded() {
+    if (!this.streamActive) return;
+    this.streamActive = false;
+    this.emit('stream', { state: 'ended', username: this.username });
+  }
+
   bind(c) {
     const on = (name, handler) => c.on(name, handler);
 
     on(ControlEvent.CONNECTED, s => {
       this.roomId = String(s?.roomId || this.roomId || '');
       this.running = true;
+      this.streamActive = true;
       this.setStatus('Connected');
       this.emit('stream', { state: 'started', roomId: this.roomId || null, username: this.username });
     });
@@ -87,7 +95,7 @@ export class TikTokService {
       this.running = false;
       if (this.connection === c) this.connection = null;
       this.setStatus('Disconnected');
-      this.emit('stream', { state: 'ended', username: this.username });
+      this.emitStreamEnded();
     });
     on(ControlEvent.ERROR, e => {
       const d = errorDetails(e);
@@ -98,7 +106,7 @@ export class TikTokService {
     on(ControlEvent.STREAM_END, () => {
       this.running = false;
       this.setStatus('Disconnected');
-      this.emit('stream', { state: 'ended', username: this.username });
+      this.emitStreamEnded();
     });
 
     on('chat', d => this.emit('chat', { username: usernameOf(d), nickname: nicknameOf(d), message: commentOf(d) }));
@@ -134,11 +142,11 @@ export class TikTokService {
     });
 
     if (debugEnabled) {
-      on(ControlEvent.RAW_DATA, (messageTypeName, binary) => console.log('[TikTok] Raw Webcast message=' + String(messageTypeName) + ' bytes=' + (binary?.byteLength ?? binary?.length ?? 0)));
-      on(ControlEvent.DECODED_DATA, (eventName, decodedData) => {
+      if (ControlEvent.RAW_DATA) on(ControlEvent.RAW_DATA, (messageTypeName, binary) => console.log('[TikTok] Raw Webcast message=' + String(messageTypeName) + ' bytes=' + (binary?.byteLength ?? binary?.length ?? 0)));
+      if (ControlEvent.DECODED_DATA) on(ControlEvent.DECODED_DATA, (eventName, decodedData) => {
         console.log('[TikTok] Decoded event=' + String(eventName) + ' keys=' + (decodedData && typeof decodedData === 'object' ? Object.keys(decodedData).slice(0, 20).join(',') : typeof decodedData));
       });
-      on(ControlEvent.WEBSOCKET_CONNECTED, client => {
+      if (ControlEvent.WEBSOCKET_CONNECTED) on(ControlEvent.WEBSOCKET_CONNECTED, client => {
         if (!client?.on) return;
         client.on('messageDecodingFailed', err => console.error('[TikTok] PROTOBUF DECODE FAILED:', errorDetails(err)));
         client.on('protoMessageFetchResult', result => {
