@@ -3,6 +3,7 @@ import { broadcast } from './ws.js';
 import { createEvent, safeJsonValue } from './events.js';
 
 const debugEnabled = /^(1|true|yes|on)$/i.test(String(process.env.TIKTOK_DEBUG || ''));
+const eulerApiKey = String(process.env.EULER_API_KEY || '').trim();
 function debug(...args) { if (debugEnabled) console.log(...args); }
 function requestTimeoutMs() {
   const value = Number(process.env.TIKTOK_HTTP_TIMEOUT_MS || 10_000);
@@ -210,28 +211,24 @@ export class TikTokService {
     this.connection = new TikTokLiveConnection(this.username, {
       enableExtendedGiftInfo: false,
       processInitialData: true,
-      fetchRoomInfoOnConnect: false,
+      fetchRoomInfoOnConnect: true,
       authenticateWs: false,
+      signApiKey: eulerApiKey || undefined,
       webClientOptions: { cache: false, timeout: { request: timeoutMs } },
       wsClientOptions: { handshakeTimeout: timeoutMs }
     });
     this.bind(this.connection);
 
     try {
-      if (!explicitRoomId) {
-        try {
-          explicitRoomId = String(await this.connection.fetchRoomId() || '').trim();
-        } catch (e) {
-          console.warn('[TikTok] Connector Room ID discovery failed:', JSON.stringify(errorDetails(e)));
-        }
-        if (!explicitRoomId) explicitRoomId = await directHtmlRoomId(this.username);
-        if (!explicitRoomId) {
-          throw Error('Room ID LIVE tidak dapat diverifikasi. Jangan gunakan ID generik; masukkan Room ID LIVE yang benar jika discovery TikTok diblokir.');
-        }
-      }
       this.roomId = explicitRoomId;
-      console.log('[TikTok] Connecting @' + this.username + ' roomId=' + explicitRoomId);
-      return await this.connection.connect(explicitRoomId);
+      console.log('[TikTok] Connecting @' + this.username +
+        ' mode=' + (explicitRoomId ? 'manual-room' : 'auto-room') +
+        ' euler=' + (eulerApiKey ? 'configured' : 'anonymous'));
+      const state = explicitRoomId
+        ? await this.connection.connect(explicitRoomId)
+        : await this.connection.connect();
+      this.roomId = String(state?.roomId || this.connection?.roomId || explicitRoomId || '');
+      return state;
     } catch (e) {
       const failedConnection = this.connection;
       this.running = false;
@@ -239,7 +236,12 @@ export class TikTokService {
       if (failedConnection) try { await failedConnection.disconnect(); } catch {}
       const d = errorDetails(e);
       console.error('[TikTok] CONNECT FAILED @' + this.username, JSON.stringify(d));
-      this.setStatus('Error', d.message);
+      const roomResolutionFailed = /room id|retrieve room|all sources/i.test(d.message + ' ' + String(d.info || ''));
+      const publicMessage = roomResolutionFailed && !eulerApiKey
+        ? 'Resolver TikTok dari server cloud gagal. Tambahkan EULER_API_KEY (Community/free) di Render agar Room ID dan WebSocket LIVE dapat di-resolve otomatis.'
+        : d.message;
+      this.setStatus('Error', publicMessage);
+      if (publicMessage !== d.message) throw Error(publicMessage, { cause: e });
       throw e;
     }
   }
