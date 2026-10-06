@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { getConfig } from './config.js';
 
 function parseOrigins() {
   return String(process.env.API_ALLOWED_ORIGINS || '')
@@ -8,7 +9,7 @@ function parseOrigins() {
 }
 
 export function apiKey() {
-  return String(process.env.API_KEY || '').trim();
+  return String(process.env.API_KEY || getConfig().wsToken || '').trim();
 }
 
 export function allowedOrigins() {
@@ -23,8 +24,6 @@ function sameSecret(a, b) {
 
 export function apiAuth(req, res, next) {
   const expected = apiKey();
-  if (!expected) return res.status(503).json({ error: 'External API belum dikonfigurasi.' });
-
   const auth = String(req.headers.authorization || '');
   const bearer = auth.match(/^Bearer\s+(.+)$/i)?.[1] || '';
   const supplied = bearer || String(req.headers['x-api-key'] || '');
