@@ -25,6 +25,8 @@ services:
         value: 10000
       - key: TIKTOK_DEBUG
         value: "false"
+      - key: AUTO_START_LIVE
+        value: "true"
       - key: ADMIN_USERNAME
         sync: false
       - key: ADMIN_PASSWORD
