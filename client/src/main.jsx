@@ -1,6 +1,167 @@
-import React,{useEffect,useState}from'react';import{createRoot}from'react-dom/client';import{io}from'socket.io-client';import'./styles.css';
-const types=['all','chat','gift','like','follow','share','viewer','stream'];
-async function api(path,options={}){const r=await fetch(path,{credentials:'include',headers:{'content-type':'application/json'},...options});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||'HTTP '+r.status);return d}
-function Login({done}){const[u,setU]=useState('admin'),[p,setP]=useState(''),[e,setE]=useState('');return <main className="auth"><form onSubmit={async x=>{x.preventDefault();setE('');try{await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:u,password:p})});done()}catch(err){setE(err.message)}}}><h1>TLK</h1><h2>TikTok Live Konektor</h2><input autoComplete="username"value={u}onChange={x=>setU(x.target.value)}placeholder="Username"/><input autoComplete="current-password"type="password"value={p}onChange={x=>setP(x.target.value)}placeholder="Password"/>{e&&<div className="error">{e}</div>}<button>Masuk</button></form></main>}
-function Dashboard({logout}){const[s,setS]=useState(),[c,setC]=useState(),[events,setEvents]=useState([]),[f,setF]=useState('all'),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');useEffect(()=>{let mounted=true;api('/api/state').then(x=>mounted&&setS(x)).catch(logout);api('/api/config').then(x=>mounted&&setC(x)).catch(()=>{});const socket=io({path:'/socket.io',withCredentials:true,reconnection:true,reconnectionAttempts:Infinity});socket.on('state',x=>setS(x));socket.on('status',x=>setS(x));socket.on('event',x=>setEvents(v=>v.concat(x).slice(-500)));socket.on('stats',stats=>setS(v=>v?{...v,stats}:v));socket.on('history',x=>setEvents(Array.isArray(x)?x:[]));socket.on('connect_error',()=>setNotice('Koneksi realtime terputus, mencoba menghubungkan kembali...'));socket.on('connect',()=>setNotice(''));return()=>{mounted=false;socket.close()}},[logout]);if(!s)return <main className="loading">Loading...</main>;const list=events.filter(x=>f==='all'||x.event===f);const safeData=x=>{try{return JSON.stringify(x?.data)}catch{return '[payload tidak dapat ditampilkan]'}};async function start(){setBusy(true);setNotice('');try{const x=await api('/api/live/start',{method:'POST',body:JSON.stringify({username:c?.tiktokUsername,roomId:c?.tiktokRoomId})});setS(x)}catch(e){setNotice(e.message)}finally{setBusy(false)}}async function stop(){setBusy(true);setNotice('');try{const x=await api('/api/live/stop',{method:'POST'});setS(x)}catch(e){setNotice(e.message)}finally{setBusy(false)}}async function save(){setBusy(true);try{const x=await api('/api/config',{method:'PUT',body:JSON.stringify({tiktokUsername:c?.tiktokUsername||'',tiktokRoomId:c?.tiktokRoomId||'',webhooks:c?.webhooks||[]})});setC(x);setS(v=>({...v,username:x.tiktokUsername,roomId:x.tiktokRoomId||null}));setNotice('Konfigurasi tersimpan')}catch(e){setNotice(e.message)}finally{setBusy(false)}}return <main><header><b>TLK</b><span>@{c?.tiktokUsername||s.username} · {s.status}</span><button onClick={async()=>{try{await api('/api/auth/logout',{method:'POST'})}finally{logout()}}}>Logout</button></header><section className="grid"><aside><div className="card"><h3>Connection</h3><label>TikTok Username</label><input value={c?.tiktokUsername||''}onChange={e=>setC(v=>({...v,tiktokUsername:e.target.value.replace(/^@/,'')}))}placeholder="jalurtarot"/><label>Room ID (opsional)</label><input inputMode="numeric"value={c?.tiktokRoomId||''}onChange={e=>setC(v=>({...v,tiktokRoomId:e.target.value.replace(/\D/g,'')}))}placeholder="1234567890123456789"/><small className="hint">Isi Room ID jika otomatis gagal.</small><div className="buttons"><button onClick={save}disabled={busy}>SIMPAN</button>{s.running?<button onClick={stop}disabled={busy}>STOP</button>:<button onClick={start}disabled={busy}>{busy?'MENGHUBUNGKAN...':'START LIVE'}</button>}</div>{notice&&<div className="notice">{notice}</div>}{s.error&&<pre className="error-detail">{s.error}</pre>}</div><div className="card"><h3>Stats</h3><p>Chat {s.stats.chat} · Gift {s.stats.gifts} · Coins {s.stats.giftCoins} · Like {s.stats.likes} · Follow {s.stats.follows} · Peak {s.stats.peakViewers}</p></div></aside><div className="card feed"><nav>{types.map(x=><button className={f===x?'active':''}onClick={()=>setF(x)}key={x}>{x}</button>)}</nav>{list.map(x=><div className="event"key={x.id||x.timestamp}><b>{x.event}</b><span>{safeData(x)}</span><small>{new Date(x.timestamp).toLocaleTimeString('id-ID')}</small></div>)}</div></section></main>}
-function App(){const[a,setA]=useState(null);useEffect(()=>{api('/api/auth/me').then(()=>setA(1)).catch(()=>setA(0))},[]);return a===null?<main className="loading">Starting...</main>:a?<Dashboard logout={()=>setA(0)}/>:<Login done={()=>setA(1)}/>}createRoot(document.getElementById('root')).render(<App/>);
+import React,{useEffect,useMemo,useState}from'react';
+import{createRoot}from'react-dom/client';
+import{io}from'socket.io-client';
+import'./styles.css';
+
+const filters=[
+  ['all','Semua'],['chat','Komentar'],['like','Like'],['gift','Gift'],
+  ['follow','Follow'],['share','Share'],['member','Masuk'],['viewer','Viewer'],['stream','Status']
+];
+const visibleTypes=new Set(filters.slice(1).map(x=>x[0]));
+const labels={chat:'Komentar',like:'Like',gift:'Gift',follow:'Follow',share:'Share',member:'Masuk',viewer:'Viewer',stream:'LIVE'};
+const icons={chat:'💬',like:'♥',gift:'🎁',follow:'＋',share:'↗',member:'👋',viewer:'◉',stream:'●'};
+
+async function api(path,options={}){
+  const r=await fetch(path,{credentials:'include',headers:{'content-type':'application/json'},...options});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok)throw Error(d.error||'HTTP '+r.status);
+  return d;
+}
+
+function Login({done}){
+  const[u,setU]=useState('admin'),[p,setP]=useState(''),[e,setE]=useState('');
+  return <main className="auth"><form onSubmit={async x=>{
+    x.preventDefault();setE('');
+    try{await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:u,password:p})});done()}
+    catch(err){setE(err.message)}
+  }}>
+    <div className="brand"><span className="brand-mark">TLK</span><div><h1>TikTok Live Konektor</h1><p>Realtime event bridge</p></div></div>
+    <label>Username</label><input autoComplete="username"value={u}onChange={x=>setU(x.target.value)}placeholder="Username"/>
+    <label>Password</label><input autoComplete="current-password"type="password"value={p}onChange={x=>setP(x.target.value)}placeholder="Password"/>
+    {e&&<div className="error">{e}</div>}<button className="primary">Masuk</button>
+  </form></main>
+}
+
+function compact(n){
+  const x=Number(n)||0;
+  return Intl.NumberFormat('id-ID',{notation:x>=1000?'compact':'standard',maximumFractionDigits:1}).format(x);
+}
+function actorOf(x){
+  const d=x?.data||{};
+  const nickname=String(d.nickname||'').trim();
+  const username=String(d.username||'').trim();
+  if(nickname)return {name:nickname,handle:username&&username!=='unknown'&&username!==nickname?'@'+username:''};
+  if(username&&username!=='unknown')return {name:'@'+username,handle:''};
+  return {name:'Penonton TikTok',handle:''};
+}
+function eventBody(x){
+  const d=x?.data||{};
+  switch(x.event){
+    case'chat':return d.message||'Komentar';
+    case'like':return `memberi ${compact(d.likeCount||1)} like`;
+    case'gift':return `mengirim ${d.giftName||'gift'}${Number(d.repeatCount)>1?' ×'+compact(d.repeatCount):''}`;
+    case'follow':return 'mulai mengikuti';
+    case'share':return 'membagikan LIVE';
+    case'member':return 'bergabung ke LIVE';
+    case'viewer':return `${compact(d.viewerCount)} penonton sedang menonton`;
+    case'stream':return d.state==='started'?'LIVE terhubung':'LIVE berakhir';
+    default:return '';
+  }
+}
+function EventCard({item}){
+  const actor=actorOf(item), body=eventBody(item), isSystem=['viewer','stream'].includes(item.event);
+  return <article className={'event event-'+item.event}>
+    <div className="event-icon" aria-hidden="true">{icons[item.event]||'•'}</div>
+    <div className="event-main">
+      <div className="event-top">
+        <div className="event-identity">
+          <strong>{isSystem?labels[item.event]:actor.name}</strong>
+          {!isSystem&&actor.handle&&<span>{actor.handle}</span>}
+        </div>
+        <time>{new Date(item.timestamp).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</time>
+      </div>
+      <div className={'event-copy '+(item.event==='chat'?'comment':'')}>{body}</div>
+      {item.event!=='chat'&&<span className="event-label">{labels[item.event]||item.event}</span>}
+    </div>
+  </article>
+}
+
+function Stat({label,value,sub}){
+  return <div className="stat"><span>{label}</span><strong>{compact(value)}</strong>{sub&&<small>{sub}</small>}</div>
+}
+
+function Dashboard({logout}){
+  const[s,setS]=useState(),[c,setC]=useState(),[events,setEvents]=useState([]),[f,setF]=useState('all'),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
+  useEffect(()=>{
+    let mounted=true;
+    api('/api/state').then(x=>mounted&&setS(x)).catch(logout);
+    api('/api/config').then(x=>mounted&&setC(x)).catch(()=>{});
+    const socket=io({path:'/socket.io',withCredentials:true,reconnection:true,reconnectionAttempts:Infinity});
+    socket.on('state',x=>setS(x));
+    socket.on('status',x=>setS(x));
+    socket.on('event',x=>setEvents(v=>v.concat(x).slice(-500)));
+    socket.on('stats',stats=>setS(v=>v?{...v,stats}:v));
+    socket.on('history',x=>setEvents(Array.isArray(x)?x:[]));
+    socket.on('connect_error',()=>setNotice('Koneksi realtime terputus. Menghubungkan kembali…'));
+    socket.on('connect',()=>setNotice(''));
+    return()=>{mounted=false;socket.close()};
+  },[logout]);
+
+  const list=useMemo(()=>events.filter(x=>visibleTypes.has(x.event)&&(f==='all'||x.event===f)).slice().reverse(),[events,f]);
+  if(!s)return <main className="loading">Loading…</main>;
+
+  async function start(){
+    setBusy(true);setNotice('');
+    try{const x=await api('/api/live/start',{method:'POST',body:JSON.stringify({username:c?.tiktokUsername,roomId:c?.tiktokRoomId})});setS(x)}
+    catch(e){setNotice(e.message)}finally{setBusy(false)}
+  }
+  async function stop(){
+    setBusy(true);setNotice('');
+    try{const x=await api('/api/live/stop',{method:'POST'});setS(x)}
+    catch(e){setNotice(e.message)}finally{setBusy(false)}
+  }
+  async function save(){
+    setBusy(true);
+    try{
+      const x=await api('/api/config',{method:'PUT',body:JSON.stringify({tiktokUsername:c?.tiktokUsername||'',tiktokRoomId:c?.tiktokRoomId||'',webhooks:c?.webhooks||[]})});
+      setC(x);setS(v=>({...v,username:x.tiktokUsername,roomId:x.tiktokRoomId||null}));setNotice('Konfigurasi tersimpan');
+    }catch(e){setNotice(e.message)}finally{setBusy(false)}
+  }
+
+  const connected=s.status==='Connected';
+  const stats=s.stats||{};
+  return <main className="app-shell">
+    <header>
+      <div className="brand compact-brand"><span className="brand-mark">TLK</span><div><strong>TikTok Live Konektor</strong><small>Realtime dashboard</small></div></div>
+      <div className={'status '+(connected?'online':'offline')}><i></i><span>{s.status}</span><b>@{c?.tiktokUsername||s.username||'—'}</b></div>
+      <button className="ghost" onClick={async()=>{try{await api('/api/auth/logout',{method:'POST'})}finally{logout()}}}>Logout</button>
+    </header>
+
+    <section className="dashboard">
+      <aside>
+        <div className="panel connection">
+          <div className="panel-title"><div><h3>Koneksi LIVE</h3><p>Hubungkan akun TikTok yang sedang LIVE.</p></div><span className={'live-pill '+(connected?'on':'')}>{connected?'LIVE':'OFFLINE'}</span></div>
+          <label>TikTok Username</label>
+          <div className="input-prefix"><span>@</span><input value={c?.tiktokUsername||''}onChange={e=>setC(v=>({...v,tiktokUsername:e.target.value.replace(/^@/,''),tiktokRoomId:v?.tiktokRoomId||''}))}placeholder="username"/></div>
+          <label>Room ID <em>opsional</em></label>
+          <input inputMode="numeric"value={c?.tiktokRoomId||''}onChange={e=>setC(v=>({...v,tiktokRoomId:e.target.value.replace(/\D/g,'')}))}placeholder="Kosongkan untuk otomatis"/>
+          <small className="hint">Biarkan kosong bila resolver otomatis aktif.</small>
+          <div className="buttons"><button className="secondary" onClick={save}disabled={busy}>Simpan</button>{s.running?<button className="danger" onClick={stop}disabled={busy}>Stop LIVE</button>:<button className="primary" onClick={start}disabled={busy}>{busy?'Menghubungkan…':'Start LIVE'}</button>}</div>
+          {notice&&<div className="notice">{notice}</div>}{s.error&&<div className="error-detail">{s.error}</div>}
+        </div>
+
+        <div className="stats-grid">
+          <Stat label="Komentar" value={stats.chat}/>
+          <Stat label="Like" value={stats.likes}/>
+          <Stat label="Gift" value={stats.gifts}/>
+          <Stat label="Coins" value={stats.giftCoins}/>
+          <Stat label="Viewer" value={stats.viewerCount} sub={'Peak '+compact(stats.peakViewers)}/>
+          <Stat label="Follow" value={stats.follows}/>
+        </div>
+      </aside>
+
+      <section className="panel feed">
+        <div className="feed-head"><div><h2>Aktivitas LIVE</h2><p>Event terbaru tampil paling atas.</p></div><span>{list.length} event</span></div>
+        <nav>{filters.map(([key,label])=><button className={f===key?'active':''}onClick={()=>setF(key)}key={key}>{label}</button>)}</nav>
+        <div className="event-list">{list.length?list.map(x=><EventCard item={x} key={x.id||x.timestamp}/>):<div className="empty"><div>◌</div><strong>Belum ada aktivitas</strong><span>Komentar, like, gift, dan event LIVE akan muncul di sini.</span></div>}</div>
+      </section>
+    </section>
+  </main>
+}
+
+function App(){
+  const[a,setA]=useState(null);
+  useEffect(()=>{api('/api/auth/me').then(()=>setA(1)).catch(()=>setA(0))},[]);
+  return a===null?<main className="loading">Starting…</main>:a?<Dashboard logout={()=>setA(0)}/>:<Login done={()=>setA(1)}/>;
+}
+createRoot(document.getElementById('root')).render(<App/>);
