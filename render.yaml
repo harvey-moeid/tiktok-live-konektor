@@ -3,7 +3,7 @@ services:
     name: tiktok-live-konektor
     runtime: node
     plan: free
-    buildCommand: npm install --no-audit --no-fund && npm run build
+    buildCommand: npm install --include=dev --no-audit --no-fund && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
