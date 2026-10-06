@@ -184,14 +184,15 @@ Connection attempts are rate-limited and tokens are compared using a timing-safe
 
 ## Automatic Room ID discovery
 
-When **START LIVE** is requested, the server delegates discovery to `tiktok-live-connector` v2.5:
+When **START LIVE** is requested, the server uses a layered resolver:
 
 1. A manual Room ID from the dashboard is used when present.
-2. Otherwise `connect()` resolves the Room ID from the TikTok username using the connector's composite resolver.
-3. If `EULER_API_KEY` is configured, it is passed as `signApiKey` so the connector can use Euler Stream for reliable cloud-hosted resolution/signing.
-4. `fetchRoomInfoOnConnect` remains enabled so a connection is accepted only for a valid LIVE room.
+2. Otherwise `fetchRoomId()` runs the connector's native composite resolver (TikTok HTML/API and Euler fallback when available).
+3. If the native resolver still fails, the service performs a strict direct `@username/live` HTML probe with browser-like headers and parses only known LIVE Room ID fields, including escaped JSON/HTML-entity variants.
+4. Once a Room ID is resolved, `connect(roomId)` is used so the connection does not repeat Room ID discovery.
+5. `fetchRoomInfoOnConnect` remains enabled so the resolved room is still validated as a LIVE room.
 
-On datacenter/cloud IPs, TikTok HTML/API discovery can return a normal page without usable LIVE metadata. In that case configure `EULER_API_KEY` rather than guessing a generic numeric TikTok ID.
+If `EULER_API_KEY` is configured, it is passed as `signApiKey` to the connector. On datacenter/cloud IPs, TikTok may still block or omit LIVE metadata; in that case Euler or a current manual Room ID can be used without weakening the strict Room ID validation.
 
 `tiktok-live-connector` is unofficial. Extended gift info remains disabled by default.
 
