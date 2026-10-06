@@ -33,3 +33,20 @@ jobs:
           name: tiktok-live-konektor-dist
           path: client/dist
           if-no-files-found: error
+
+  render-production-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      NODE_ENV: production
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24.x
+      - name: Install exactly like Render dashboard
+        run: npm install --no-audit --no-fund
+      - name: Build client with production environment
+        run: npm run build
+      - name: Verify built entrypoint
+        run: test -s client/dist/index.html
