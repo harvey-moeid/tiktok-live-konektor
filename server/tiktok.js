@@ -1,4 +1,4 @@
-import { TikTokLiveConnection, ControlEvent } from 'tiktok-live-connector';
+import { TikTokLiveConnection, ControlEvent, WebcastEvent } from 'tiktok-live-connector';
 import { broadcast } from './ws.js';
 import { createEvent, safeJsonValue } from './events.js';
 
@@ -15,7 +15,18 @@ function errorDetails(e) {
     try { return JSON.parse(JSON.stringify(v, (k, x) => (k === 'request' || k === 'response' ? undefined : x))); }
     catch { return String(v); }
   };
-  return { message: e?.message || String(e), name: e?.name || 'Error', code: e?.code || null, cause: clean(e?.cause), errors: clean(e?.errors) || clean(e?.requestErrs) || null };
+  const wrapped = e && typeof e === 'object' ? e : {};
+  const source = wrapped.exception || wrapped.error || e;
+  const info = clean(wrapped.info);
+  const message = source?.message || (typeof wrapped.info === 'string' ? wrapped.info : '') || (typeof e === 'string' ? e : '') || 'Unknown TikTok connector error';
+  return {
+    message,
+    name: source?.name || e?.name || 'Error',
+    code: source?.code || e?.code || null,
+    info,
+    cause: clean(source?.cause || e?.cause),
+    errors: clean(source?.errors || source?.requestErrs || e?.errors || e?.requestErrs)
+  };
 }
 function first(...values) { return values.find(v => v !== undefined && v !== null && String(v).trim() !== ''); }
 function userOf(d) { return d?.user || d?.memberMessage?.user || d?.chatMessage?.user || d?.likeMessage?.user || d?.giftMessage?.user || d?.followMessage?.user || d?.shareMessage?.user || {}; }
@@ -29,8 +40,7 @@ export function extractRoomIdFromHtml(html) {
     /["']roomId["']\s*[:=]\s*["']?(\d{5,30})["']?/gi,
     /["']room_id["']\s*[:=]\s*["']?(\d{5,30})["']?/gi,
     /["']roomID["']\s*[:=]\s*["']?(\d{5,30})["']?/gi,
-    /["']liveRoomId["']\s*[:=]\s*["']?(\d{5,30})["']?/gi,
-    /"id"\s*:\s*"?(\d{12,30})"?/gi
+    /["']liveRoomId["']\s*[:=]\s*["']?(\d{5,30})["']?/gi
   ];
   for (const re of patterns) {
     const m = re.exec(html);
@@ -40,20 +50,28 @@ export function extractRoomIdFromHtml(html) {
 }
 
 async function directHtmlRoomId(username) {
-  const urls = ['https://www.tiktok.com/@' + encodeURIComponent(username) + '/live', 'https://www.tiktok.com/@' + encodeURIComponent(username)];
-  const headers = { 'user-agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36', accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'accept-language': 'en-US,en;q=0.9', 'cache-control': 'no-cache' };
-  for (const url of urls) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const response = await fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(requestTimeoutMs()) });
-        const html = await response.text();
-        debug('[TikTok] HTML probe status=' + response.status + ' bytes=' + html.length + ' url=' + url);
-        if (!response.ok) throw Error('HTTP ' + response.status);
-        const roomId = extractRoomIdFromHtml(html);
-        if (roomId) return roomId;
-      } catch (e) { console.warn('[TikTok] HTML probe failed:', e?.message || String(e)); }
-      if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * attempt));
+  const url = 'https://www.tiktok.com/@' + encodeURIComponent(username) + '/live';
+  const headers = {
+    'user-agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/140.0 Mobile Safari/537.36',
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9',
+    'cache-control': 'no-cache'
+  };
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(url, { headers, redirect: 'follow', signal: AbortSignal.timeout(requestTimeoutMs()) });
+      const html = await response.text();
+      debug('[TikTok] HTML probe status=' + response.status + ' bytes=' + html.length + ' url=' + url);
+      if (!response.ok) throw Error('HTTP ' + response.status);
+      const roomId = extractRoomIdFromHtml(html);
+      if (roomId) {
+        console.warn('[TikTok] Using strict HTML fallback Room ID=' + roomId);
+        return roomId;
+      }
+    } catch (e) {
+      console.warn('[TikTok] HTML probe failed:', e?.message || String(e));
     }
+    if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * attempt));
   }
   return '';
 }
@@ -71,6 +89,7 @@ export class TikTokService {
 
   emit(type, data) {
     const event = createEvent(type, data, { username: this.username, roomId: this.roomId });
+    debug('[TikTok] Event=' + type + ' room=' + (this.roomId || 'unknown'));
     this.emitEvent(event);
     broadcast(event);
   }
@@ -85,22 +104,24 @@ export class TikTokService {
     const on = (name, handler) => c.on(name, handler);
 
     on(ControlEvent.CONNECTED, s => {
-      this.roomId = String(s?.roomId || this.roomId || '');
+      this.roomId = String(s?.roomId || c?.roomId || this.roomId || '');
       this.running = true;
       this.streamActive = true;
+      console.log('[TikTok] Connected @' + this.username + ' roomId=' + (this.roomId || 'unknown'));
       this.setStatus('Connected');
       this.emit('stream', { state: 'started', roomId: this.roomId || null, username: this.username });
     });
-    on(ControlEvent.DISCONNECTED, () => {
+    on(ControlEvent.DISCONNECTED, detail => {
       this.running = false;
       if (this.connection === c) this.connection = null;
+      console.warn('[TikTok] Disconnected', JSON.stringify(safeJsonValue(detail)));
       this.setStatus('Disconnected');
       this.emitStreamEnded();
     });
     on(ControlEvent.ERROR, e => {
       const d = errorDetails(e);
       console.error('[TikTok] Connector ERROR', JSON.stringify(d));
-      this.setStatus('Error', d.message);
+      if (!c?.isConnected) this.setStatus('Error', d.message);
     });
     on(ControlEvent.ENTER_ROOM, d => debug('[TikTok] ENTER_ROOM room=' + String(d?.roomId || d?.room?.roomId || 'unknown')));
     on(ControlEvent.STREAM_END, () => {
@@ -109,8 +130,12 @@ export class TikTokService {
       this.emitStreamEnded();
     });
 
-    on('chat', d => this.emit('chat', { username: usernameOf(d), nickname: nicknameOf(d), message: commentOf(d) }));
-    on('gift', d => {
+    on(WebcastEvent.CHAT, d => this.emit('chat', {
+      username: usernameOf(d),
+      nickname: nicknameOf(d),
+      message: commentOf(d)
+    }));
+    on(WebcastEvent.GIFT, d => {
       const gift = d?.giftDetails || d?.gift || d?.extendedGiftInfo || {};
       const repeatCount = numberOf(d?.repeatCount, d?.repeat_count, 1) || 1;
       const diamondCount = numberOf(d?.diamondCount, d?.diamond_count, gift?.diamondCount, gift?.diamond_count);
@@ -123,18 +148,24 @@ export class TikTokService {
         totalValue: diamondCount * repeatCount
       });
     });
-    on('like', d => this.emit('like', {
+    on(WebcastEvent.LIKE, d => this.emit('like', {
       username: usernameOf(d),
       nickname: nicknameOf(d),
       likeCount: Math.max(numberOf(d?.likeCount, d?.like_count, 1) || 1, 1),
       totalLikeCount: numberOf(d?.totalLikeCount, d?.total_like_count)
     }));
-    on('roomUser', d => this.emit('viewer', { viewerCount: numberOf(d?.viewerCount, d?.viewer_count, d?.roomUser?.viewerCount, d?.stats?.viewerCount, d?.stats?.viewer_count) }));
-    on('member', d => this.emit('member', { username: usernameOf(d), nickname: nicknameOf(d), memberCount: numberOf(d?.memberCount, d?.member_count) }));
+    on(WebcastEvent.ROOM_USER, d => this.emit('viewer', {
+      viewerCount: numberOf(d?.viewerCount, d?.viewer_count, d?.roomUser?.viewerCount, d?.stats?.viewerCount, d?.stats?.viewer_count)
+    }));
+    on(WebcastEvent.MEMBER, d => this.emit('member', {
+      username: usernameOf(d),
+      nickname: nicknameOf(d),
+      memberCount: numberOf(d?.memberCount, d?.member_count)
+    }));
     for (const eventName of ['emote', 'envelope', 'questionNew', 'linkMicBattle', 'linkMicArmies', 'liveIntro', 'subscribe', 'goalUpdate', 'roomMessage', 'captionMessage', 'imDelete', 'inRoomBanner', 'rankUpdate', 'pollMessage', 'rankText']) {
       on(eventName, d => this.emit(eventName, safeJsonValue(d)));
     }
-    on('social', d => {
+    on(WebcastEvent.SOCIAL, d => {
       const action = String(first(d?.displayType, d?.action, d?.socialType, '') || '').toLowerCase();
       if (action.includes('follow')) this.emit('follow', { username: usernameOf(d), nickname: nicknameOf(d) });
       else if (action.includes('share')) this.emit('share', { username: usernameOf(d), nickname: nicknameOf(d) });
@@ -142,16 +173,24 @@ export class TikTokService {
     });
 
     if (debugEnabled) {
-      if (ControlEvent.RAW_DATA) on(ControlEvent.RAW_DATA, (messageTypeName, binary) => console.log('[TikTok] Raw Webcast message=' + String(messageTypeName) + ' bytes=' + (binary?.byteLength ?? binary?.length ?? 0)));
+      if (ControlEvent.RAW_DATA) on(ControlEvent.RAW_DATA, (messageTypeName, binary) => {
+        console.log('[TikTok] Raw Webcast message=' + String(messageTypeName) + ' bytes=' + (binary?.byteLength ?? binary?.length ?? 0));
+      });
       if (ControlEvent.DECODED_DATA) on(ControlEvent.DECODED_DATA, (eventName, decodedData) => {
         console.log('[TikTok] Decoded event=' + String(eventName) + ' keys=' + (decodedData && typeof decodedData === 'object' ? Object.keys(decodedData).slice(0, 20).join(',') : typeof decodedData));
       });
       if (ControlEvent.WEBSOCKET_CONNECTED) on(ControlEvent.WEBSOCKET_CONNECTED, client => {
+        console.log('[TikTok] WebSocket transport connected');
         if (!client?.on) return;
-        client.on('messageDecodingFailed', err => console.error('[TikTok] PROTOBUF DECODE FAILED:', errorDetails(err)));
+        client.on('messageDecodingFailed', err => console.error('[TikTok] PROTOBUF DECODE FAILED:', JSON.stringify(errorDetails(err))));
         client.on('protoMessageFetchResult', result => {
           const messages = Array.isArray(result?.messages) ? result.messages : Array.isArray(result) ? result : [];
-          const summary = messages.map(m => ({ type: m?.method || m?.type || 'unknown', hasDecodedData: !!m?.decodedData, decodeError: m?.decodeError ? String(m.decodeError?.message || m.decodeError) : null, payloadBytes: m?.payload?.byteLength ?? m?.payload?.length ?? 0 }));
+          const summary = messages.map(m => ({
+            type: m?.method || m?.type || 'unknown',
+            hasDecodedData: !!m?.decodedData,
+            decodeError: m?.decodeError ? String(m.decodeError?.message || m.decodeError) : null,
+            payloadBytes: m?.payload?.byteLength ?? m?.payload?.length ?? 0
+          }));
           console.log('[TikTok] Proto message result count=' + messages.length + ' details=' + JSON.stringify(summary).slice(0, 4000));
         });
       });
@@ -180,12 +219,18 @@ export class TikTokService {
 
     try {
       if (!explicitRoomId) {
-        try { explicitRoomId = String(await this.connection.fetchRoomId() || '').trim(); }
-        catch (e) { console.warn('[TikTok] Connector Room ID discovery failed:', e?.message || String(e)); }
+        try {
+          explicitRoomId = String(await this.connection.fetchRoomId() || '').trim();
+        } catch (e) {
+          console.warn('[TikTok] Connector Room ID discovery failed:', JSON.stringify(errorDetails(e)));
+        }
         if (!explicitRoomId) explicitRoomId = await directHtmlRoomId(this.username);
-        if (!explicitRoomId) throw Error('Room ID otomatis tidak ditemukan. Coba START lagi atau masukkan Room ID manual.');
+        if (!explicitRoomId) {
+          throw Error('Room ID LIVE tidak dapat diverifikasi. Jangan gunakan ID generik; masukkan Room ID LIVE yang benar jika discovery TikTok diblokir.');
+        }
       }
       this.roomId = explicitRoomId;
+      console.log('[TikTok] Connecting @' + this.username + ' roomId=' + explicitRoomId);
       return await this.connection.connect(explicitRoomId);
     } catch (e) {
       const failedConnection = this.connection;
@@ -193,6 +238,7 @@ export class TikTokService {
       this.connection = null;
       if (failedConnection) try { await failedConnection.disconnect(); } catch {}
       const d = errorDetails(e);
+      console.error('[TikTok] CONNECT FAILED @' + this.username, JSON.stringify(d));
       this.setStatus('Error', d.message);
       throw e;
     }
