@@ -11,13 +11,15 @@ npm install
 npm run dev
 ```
 
-Production:
+Production build:
 
 ```bash
-npm install
+NODE_ENV=production npm install --include=dev
 npm run build
 npm start
 ```
+
+The repository includes a project `.npmrc` with `include=dev` because Vite and the React plugin are build-time dependencies. This prevents hosts such as Render from omitting the Vite toolchain when `NODE_ENV=production` is present during the build phase.
 
 Health check: `GET /api/health`
 
@@ -76,4 +78,4 @@ If discovery fails, the account may not be LIVE, TikTok may reject the deploymen
 
 ## CI and security
 
-`CI` tests Node 20, 22, and 24, then builds the Vite client. `Security` runs on pushes, pull requests, manual dispatch, and a weekly schedule. High/critical runtime advisories fail the security job unless they match the single explicitly approved advisory chain in `scripts/security-audit.mjs`.
+`CI` tests Node 20, 22, and 24, builds the Vite client, and separately reproduces a Render-style build with `NODE_ENV=production`. `Security` runs on pushes, pull requests, manual dispatch, and a weekly schedule. High/critical runtime advisories fail the security job unless they match the single explicitly approved advisory chain in `scripts/security-audit.mjs`.
