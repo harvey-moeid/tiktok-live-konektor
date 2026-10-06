@@ -30,7 +30,7 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
       - key: TIKTOK_USERNAME
-        sync: false
+        value: jalurtarot
       - key: TIKTOK_ROOM_ID
         sync: false
       - key: EULER_API_KEY
