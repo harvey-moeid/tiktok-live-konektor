@@ -23,3 +23,68 @@ button{border:1px solid var(--line);border-radius:11px;padding:10px 13px;backgro
 @media(max-width:560px){
   header .status span{display:none}.ghost{padding:8px 10px}.dashboard{gap:10px}.connection{padding:15px}.stats-grid{gap:7px}.stat{padding:11px;min-height:76px}.stat span{font-size:9px}.stat strong{font-size:18px}.feed-head{padding:16px 14px 12px}.feed nav{padding:0 12px 12px}.event-list{padding:4px 8px 14px}.event{grid-template-columns:36px minmax(0,1fr);gap:9px;padding:12px 5px}.event-icon{width:34px;height:34px;border-radius:10px}.event-copy.comment{font-size:14px}.buttons{grid-template-columns:1fr 1.4fr}
 }
+
+/* Admin-only webhook integration editor. */
+[hidden]{display:none!important}
+.dashboard-tabs{max-width:1500px;margin:14px auto 0;padding:0 16px;display:flex;align-items:center;gap:9px}
+.dashboard-tabs button{background:transparent;color:#9aa9bd;border:1px solid transparent;padding:11px 15px;border-radius:12px;min-height:43px}
+.dashboard-tabs button.active{background:#172334;border-color:#304158;color:#f1f5f9;box-shadow:inset 0 -2px 0 var(--accent2)}
+.dashboard-tabs span{font-size:11px;border-radius:999px;background:#243141;padding:2px 7px;margin-left:7px;color:#cbd5e1}
+.webhook-shell{max-width:1500px;margin:auto;padding:16px}
+.webhook-page{min-width:0}
+.webhook-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;padding:10px 3px 20px}
+.section-overline{color:var(--accent2);font-size:11px;letter-spacing:.16em;font-weight:800}
+.webhook-heading h2{font-size:27px;letter-spacing:-.04em;margin:4px 0}
+.webhook-heading p{font-size:13px;color:var(--muted)}
+.webhook-heading-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end}
+.webhook-count{font-size:12px;color:#b7c5d8;white-space:nowrap}
+.webhook-security-note{display:flex;flex-wrap:wrap;gap:6px;align-items:center;border:1px solid #524126;background:#221b12;color:#e9d3a6;padding:13px 16px;border-radius:14px;font-size:12px;line-height:1.55;margin-bottom:17px}
+.webhook-security-note strong{color:#ffdf9e}
+.webhook-security-note a{color:#99e4df;white-space:nowrap}
+.webhook-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px;align-items:start}
+.webhook-card{min-width:0;padding:19px;background:linear-gradient(170deg,#111a25,#0d121b);border:1px solid #273344;border-radius:19px;box-shadow:0 18px 50px #0002}
+.webhook-card-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.webhook-card-top h3{font-size:15px;margin-top:3px}
+.webhook-number{color:#8fa5be;font-size:10px;letter-spacing:.11em;font-weight:800}
+.webhook-card input[type="url"],.webhook-card input[type="text"]{min-width:0}
+.webhook-toggle{display:flex;align-items:center;gap:9px;margin:0;padding:7px 10px;background:#0c121b;border:1px solid #2a384b;border-radius:999px;text-transform:none;letter-spacing:0;font-size:12px}
+.webhook-toggle input{width:18px;height:18px;accent-color:#25f4ee;cursor:pointer;margin:0}
+.webhook-card .hint{line-height:1.5}
+.webhook-event-fieldset{min-width:0;border:0;padding:0;margin:19px 0 0}
+.webhook-event-fieldset legend{padding:0;color:var(--soft);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}
+.webhook-event-options,.webhook-extra-events{display:flex;flex-wrap:wrap;gap:7px}
+.webhook-event-options button{font-size:12px;font-weight:650;padding:8px 11px;background:#0b121a;color:#9dadc2;border-color:#29384a;border-radius:9px;min-height:35px}
+.webhook-event-options button.selected{background:#153238;color:#a1fff7;border-color:#236a70}
+.webhook-extra-events{margin-top:10px}
+.webhook-extra-events button{font-size:11px;padding:5px 9px;background:#1e2635;color:#dfdfef}
+.webhook-custom{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:13px}
+.webhook-custom button{white-space:nowrap}
+.webhook-card-foot{border-top:1px solid #243043;margin-top:18px;padding-top:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+.webhook-card-foot span{font-size:11px;color:#899bb0}
+.webhook-remove{font-size:11px;color:#fecdd3;border-color:#553040;background:#25141c}
+.webhook-savebar{display:flex;align-items:center;justify-content:space-between;gap:15px;background:#121b27;border:1px solid #304056;border-radius:16px;padding:14px 17px;margin-top:17px}
+.webhook-save-info{display:grid;gap:3px;min-width:0}
+.webhook-save-info strong{font-size:13px}
+.webhook-save-info span{font-size:11px;color:#9aabc1;overflow-wrap:anywhere}
+.webhook-save-actions{display:flex;gap:8px;flex:0 0 auto}
+.webhook-empty{text-align:center;display:grid;justify-items:center;gap:10px;border:1px dashed #344459;background:#0f1620;border-radius:18px;padding:48px 20px}
+.webhook-empty h3{font-size:17px}
+.webhook-empty p{color:var(--muted);font-size:12px;max-width:370px}
+.webhook-empty-icon{width:56px;height:56px;display:grid;place-items:center;border-radius:17px;background:#17333b;color:#86fff6;font-size:28px}
+.webhook-load-error{margin:20px 0;padding:22px}
+.webhook-load-error p{color:var(--muted);margin:8px 0 15px}
+.webhook-page .notice,.webhook-page .error-detail{margin:12px 0 24px}
+@media(max-width:940px){.webhook-grid{grid-template-columns:1fr}}
+@media(max-width:560px){
+ .dashboard-tabs{padding:0 10px;margin-top:8px;gap:4px}
+ .dashboard-tabs button{padding:10px 9px;font-size:12px}
+ .webhook-shell{padding:10px}
+ .webhook-heading{align-items:stretch;flex-direction:column;padding:12px 2px 16px;gap:13px}
+ .webhook-heading h2{font-size:23px}
+ .webhook-heading-actions{justify-content:space-between}
+ .webhook-card{padding:14px;border-radius:15px}
+ .webhook-custom{grid-template-columns:1fr}
+ .webhook-savebar{align-items:stretch;flex-direction:column;padding:13px}
+ .webhook-save-actions{justify-content:flex-end}
+ .webhook-save-actions button{flex:1}
+}
