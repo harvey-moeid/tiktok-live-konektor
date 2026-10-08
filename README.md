@@ -42,6 +42,12 @@ For a complete Indonesian guide to connecting additional websites using REST API
 
 > Production note: do not embed a private API key into public frontend code or public WebSocket URLs. The browser sample below is for controlled/test clients; use a backend relay for public websites.
 
+## Webhook settings in the admin dashboard
+
+After logging in as admin, open **Integrasi Webhook** from the dashboard navigation. Add up to 20 HTTPS destinations, enable/disable each target, select event types (empty selection = all events), include optional custom event names, remove destinations, and click **Simpan webhook**. Edits are local drafts until saved; **Batalkan** reverts them. This UI uses the admin-cookie-protected `PUT /api/webhooks` endpoint which changes only `webhooks`, so unsaved LIVE username/Room ID edits will not be overwritten.
+
+The webhook sender currently does **not** sign payloads with HMAC. Use a securely protected receiver and verify each delivery independently. See [docs/INTEGRASI_WEBSITE.md](docs/INTEGRASI_WEBSITE.md) for the full guidance.
+
 ## External API v1
 
 The service exposes a read-only API for other websites/applications. Dashboard authentication remains separate and LIVE start/stop/configuration are not exposed through this API.

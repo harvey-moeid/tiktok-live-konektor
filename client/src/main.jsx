@@ -2,6 +2,7 @@ import React,{useEffect,useMemo,useState}from'react';
 import{createRoot}from'react-dom/client';
 import{io}from'socket.io-client';
 import'./styles.css';
+import WebhookSettings from './WebhookSettings.jsx';
 
 const filters=[
   ['all','Semua'],['chat','Komentar'],['like','Like'],['gift','Gift'],
@@ -82,10 +83,11 @@ function Stat({label,value,sub}){
 
 function Dashboard({logout}){
   const[s,setS]=useState(),[c,setC]=useState(),[events,setEvents]=useState([]),[f,setF]=useState('all'),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
+  const[tab,setTab]=useState('live'),[configError,setConfigError]=useState('');
   useEffect(()=>{
     let mounted=true;
     api('/api/state').then(x=>mounted&&setS(x)).catch(logout);
-    api('/api/config').then(x=>mounted&&setC(x)).catch(()=>{});
+    api('/api/config').then(x=>mounted&&setC(x)).catch(e=>mounted&&setConfigError(e.message));
     const socket=io({path:'/socket.io',withCredentials:true,reconnection:true,reconnectionAttempts:Infinity});
     socket.on('state',x=>setS(x));
     socket.on('status',x=>setS(x));
@@ -113,9 +115,21 @@ function Dashboard({logout}){
   async function save(){
     setBusy(true);
     try{
-      const x=await api('/api/config',{method:'PUT',body:JSON.stringify({tiktokUsername:c?.tiktokUsername||'',tiktokRoomId:c?.tiktokRoomId||'',webhooks:c?.webhooks||[]})});
+      const x=await api('/api/config',{method:'PUT',body:JSON.stringify({tiktokUsername:c?.tiktokUsername||'',tiktokRoomId:c?.tiktokRoomId||''})});
       setC(x);setS(v=>({...v,username:x.tiktokUsername,roomId:x.tiktokRoomId||null}));setNotice('Konfigurasi tersimpan');
     }catch(e){setNotice(e.message)}finally{setBusy(false)}
+  }
+
+  async function saveWebhooks(hooks) {
+    const result=await api('/api/webhooks',{method:'PUT',body:JSON.stringify({webhooks:hooks})});
+    setC(prev=>prev?{...prev,webhooks:result.webhooks}:prev);
+    return result.webhooks;
+  }
+
+  async function retryConfig(){
+    setConfigError('');
+    try{setC(await api('/api/config'))}
+    catch(e){setConfigError(e.message)}
   }
 
   const connected=s.status==='Connected';
@@ -127,7 +141,13 @@ function Dashboard({logout}){
       <button className="ghost" onClick={async()=>{try{await api('/api/auth/logout',{method:'POST'})}finally{logout()}}}>Logout</button>
     </header>
 
-    <section className="dashboard">
+    <nav className="dashboard-tabs" role="tablist" aria-label="Menu dashboard">
+      <button type="button" role="tab" aria-selected={tab==='live'}
+        className={tab==='live'?'active':''} onClick={()=>setTab('live')}>● Aktivitas LIVE</button>
+      <button type="button" role="tab" aria-selected={tab==='webhooks'}
+        className={tab==='webhooks'?'active':''} onClick={()=>setTab('webhooks')}>↗ Integrasi Webhook <span>{c?.webhooks?.length||0}</span></button>
+    </nav>
+    <section className="dashboard" hidden={tab!=='live'}>
       <aside>
         <div className="panel connection">
           <div className="panel-title"><div><h3>Koneksi LIVE</h3><p>Hubungkan akun TikTok yang sedang LIVE.</p></div><span className={'live-pill '+(connected?'on':'')}>{connected?'LIVE':'OFFLINE'}</span></div>
@@ -156,6 +176,13 @@ function Dashboard({logout}){
         <div className="event-list">{list.length?list.map(x=><EventCard item={x} key={x.id||x.timestamp}/>):<div className="empty"><div>◌</div><strong>Belum ada aktivitas</strong><span>Komentar, like, gift, dan event LIVE akan muncul di sini.</span></div>}</div>
       </section>
     </section>
+    <div className="webhook-shell" hidden={tab!=='webhooks'}>
+      {c?<WebhookSettings initialHooks={c.webhooks} onSave={saveWebhooks}/>:<section className="webhook-load-error panel">
+        <h2>Pengaturan webhook belum tersedia</h2>
+        <p>{configError||'Memuat konfigurasi admin…'}</p>
+        <button type="button" className="secondary" onClick={retryConfig}>Muat ulang</button>
+      </section>}
+    </div>
   </main>
 }
 

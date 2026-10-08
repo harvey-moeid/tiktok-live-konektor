@@ -195,6 +195,18 @@ app.post('/api/auth/logout', auth, (_, res) => {
 app.get('/api/auth/me', auth, (_, res) => res.json({ ok: true }));
 app.get('/api/state', auth, (_, res) => res.json(safe()));
 app.get('/api/config', auth, (_, res) => res.json(getSafeConfig()));
+// Webhook-specific admin endpoint avoids overwriting LIVE username/room settings
+// when destinations are edited independently in the dashboard.
+app.put('/api/webhooks', auth, (req, res) => {
+  if (!Array.isArray(req.body?.webhooks)) return res.status(400).json({ error: 'Daftar webhook harus berupa array.' });
+  try {
+    const webhooks = normalizeWebhooks(req.body.webhooks);
+    updateConfig({ webhooks });
+    return res.json({ ok: true, webhooks });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
 app.put('/api/config', auth, (req, res) => {
   const body = req.body || {};
   const username = String(body.tiktokUsername || '').replace(/^@/, '').trim();
