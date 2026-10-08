@@ -11,7 +11,9 @@ import { login, verify, setPassword } from './auth.js';
 import { dispatchWebhook, normalizeWebhooks } from './webhooks.js';
 import { attachExternalWs } from './ws.js';
 import { TikTokService } from './tiktok.js';
-import { normalizeEvent } from './events.js';
+import { normalizeEvent, createEvent } from './events.js';
+import { broadcast } from './ws.js';
+import { PythonLiveFallback } from './python-fallback.js';
 import { apiAuth, externalCors, isAllowedWsOrigin } from './api-auth.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,6 +46,7 @@ const state = {
 };
 const giftStreaks = new Map();
 let operation = Promise.resolve();
+let activeEngine = 'none';
 
 function auth(req, res, next) {
   try { req.user = verify(req.cookies.tlk_session); next(); }
@@ -55,6 +58,8 @@ function safe() {
     ...snapshot,
     username: getConfig().tiktokUsername,
     roomId: state.roomId || getConfig().tiktokRoomId || null,
+    engine: activeEngine,
+    pythonFallbackAvailable: python.enabled,
     running: ['Connected', 'Connecting...'].includes(state.status)
   };
 }
@@ -114,9 +119,28 @@ function handle(event) {
 }
 
 const tiktok = new TikTokService({ emitEvent: handle, setStatus });
+const python = new PythonLiveFallback({
+  emitEvent: event => {
+    if (activeEngine !== 'python') return;
+    handle(event);
+    broadcast(event);
+  },
+  setStatus: (status, error) => {
+    if (activeEngine !== 'python') return;
+    setStatus(status, error);
+    if (status !== 'Connected') {
+      const ended = createEvent('stream', { state: 'ended' }, {
+        username: getConfig().tiktokUsername, roomId: state.roomId
+      });
+      handle(ended);
+      broadcast(ended);
+      activeEngine = 'none';
+    }
+  }
+});
 attachExternalWs(server, () => [process.env.API_KEY || '', getConfig().wsToken], isAllowedWsOrigin);
 
-app.get('/api/health', (_, res) => res.json({ ok: true, status: state.status }));
+app.get('/api/health', (_, res) => res.json({ ok: true, status: state.status, engine: activeEngine }));
 
 // External read-only API for other applications.
 app.use('/api/v1', externalCors);
@@ -126,6 +150,8 @@ app.get('/api/v1/status', apiAuth, (req, res) => {
   res.json({
     ok: true,
     status: snapshot.status,
+    engine: snapshot.engine,
+    pythonFallbackAvailable: snapshot.pythonFallbackAvailable,
     running: snapshot.running,
     username: snapshot.username,
     roomId: snapshot.roomId,
@@ -195,8 +221,37 @@ app.post('/api/live/start', auth, async (req, res) => {
   const run = operation.then(async () => {
     if (['Connecting...', 'Connected', 'Stopping'].includes(state.status)) throw Error('LIVE sedang berjalan atau sedang diproses.');
     updateConfig({ tiktokUsername: username, tiktokRoomId: roomId });
-    await tiktok.start(username, roomId);
-    return safe();
+    try {
+      await tiktok.start(username, roomId);
+      activeEngine = 'node';
+      io.emit('status', safe());
+      return safe();
+    } catch (nativeError) {
+      if (!python.enabled) throw nativeError;
+      console.warn('[live] Node TikTok failed; trying Python fallback:', nativeError.message);
+      activeEngine = 'python';
+      state.roomId = null;
+      setStatus('Connecting...');
+      try {
+        const connected = await python.start(username, roomId);
+        state.roomId = connected.roomId || null;
+        const started = createEvent('stream', { state: 'started', username }, {
+          username, roomId: state.roomId
+        });
+        handle(started);
+        broadcast(started);
+        setStatus('Connected');
+        return safe();
+      } catch (pythonError) {
+        activeEngine = 'none';
+        const combined = new Error(
+          'Node: ' + String(nativeError.message || 'failed').slice(0,250) +
+          ' | Python: ' + String(pythonError.message || 'failed').slice(0,250)
+        );
+        setStatus('Error', combined.message);
+        throw combined;
+      }
+    }
   });
   operation = run.catch(() => undefined);
   try { res.json(await run); }
@@ -206,7 +261,17 @@ app.post('/api/live/stop', auth, async (_, res) => {
   const run = operation.then(async () => {
     if (state.status === 'Disconnected') return safe();
     setStatus('Stopping');
-    await tiktok.stop();
+    if (activeEngine === 'python') {
+      await python.stop();
+      const ended = createEvent('stream', { state: 'ended' }, { username: getConfig().tiktokUsername, roomId: state.roomId });
+      handle(ended);
+      broadcast(ended);
+    } else {
+      await tiktok.stop();
+    }
+    activeEngine = 'none';
+    state.roomId = null;
+    setStatus('Disconnected');
     return safe();
   });
   operation = run.catch(() => undefined);
@@ -237,6 +302,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal}`);
+  try { await python.stop(); } catch (e) { console.warn('[shutdown] Python disconnect failed:', e?.message || String(e)); }
   try { await tiktok.stop(); } catch (e) { console.warn('[shutdown] TikTok disconnect failed:', e?.message || String(e)); }
   server.close(() => process.exit(0));
   const timer = setTimeout(() => process.exit(1), 10_000);

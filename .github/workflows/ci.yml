@@ -50,3 +50,15 @@ jobs:
         run: npm run build
       - name: Verify built entrypoint
         run: test -s client/dist/index.html
+
+  python-fallback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install -r python_fallback/requirements.txt
+      - run: python -m unittest discover -s python_fallback -p 'test_*.py'
+      - run: PYTHON_BRIDGE_TOKEN=temporary-test-token-at-least-32-characters python -c "from python_fallback.app import app; assert app"

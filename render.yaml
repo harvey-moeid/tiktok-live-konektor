@@ -35,3 +35,26 @@ services:
         sync: false
       - key: EULER_API_KEY
         sync: false
+      - key: PYTHON_FALLBACK_HOSTNAME
+        fromService:
+          type: web
+          name: tiktok-live-python
+          envVarKey: RENDER_EXTERNAL_HOSTNAME
+      - key: PYTHON_FALLBACK_TOKEN
+        fromService:
+          type: web
+          name: tiktok-live-python
+          envVarKey: PYTHON_BRIDGE_TOKEN
+  - type: web
+    name: tiktok-live-python
+    runtime: python
+    plan: free
+    buildCommand: pip install -r python_fallback/requirements.txt
+    startCommand: uvicorn python_fallback.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.11
+      - key: PYTHON_BRIDGE_TOKEN
+        generateValue: true
+
