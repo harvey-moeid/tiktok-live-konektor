@@ -1,7 +1,5 @@
 import { createEvent } from './events.js';
 
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-
 export function pythonFallbackConfig(env = process.env) {
   const hostname = String(env.PYTHON_FALLBACK_HOSTNAME || '').trim();
   const explicit = String(env.PYTHON_FALLBACK_URL || '').trim();
@@ -46,7 +44,8 @@ export class PythonLiveFallback {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data || data.ok === false) {
-      throw Error(String(data?.error || 'Python fallback HTTP ' + response.status).slice(0, 500));
+      const detail = data?.error || (typeof data?.detail === 'string' ? data.detail : null);
+      throw Error(String(detail || 'Python fallback HTTP ' + response.status).slice(0, 500));
     }
     return data;
   }
