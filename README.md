@@ -36,6 +36,12 @@ Optional runtime controls are documented in `.env.example`, including `TIKTOK_RO
 
 Dashboard settings are persisted to `CONFIG_FILE`. If the deployment platform uses an ephemeral filesystem, treat environment variables as the durable baseline or attach persistent storage.
 
+## Documentation for integrating other websites
+
+For a complete Indonesian guide to connecting additional websites using REST API, realtime WebSocket, Cloudflare Worker, webhooks and security practices, see **[docs/INTEGRASI_WEBSITE.md](docs/INTEGRASI_WEBSITE.md)**.
+
+> Production note: do not embed a private API key into public frontend code or public WebSocket URLs. The browser sample below is for controlled/test clients; use a backend relay for public websites.
+
 ## External API v1
 
 The service exposes a read-only API for other websites/applications. Dashboard authentication remains separate and LIVE start/stop/configuration are not exposed through this API.
