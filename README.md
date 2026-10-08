@@ -209,3 +209,30 @@ If `EULER_API_KEY` is configured, it is passed as `signApiKey` to the connector.
 ## CI and security
 
 `CI` tests Node 20, 22, and 24, builds the Vite client, and separately reproduces a Render-style build with `NODE_ENV=production`. `Security` runs on pushes, pull requests, manual dispatch, and a weekly schedule. High/critical runtime advisories fail the security job unless they match the single explicitly approved advisory chain in `scripts/security-audit.mjs`.
+
+## Python LIVE fallback (optional)
+
+The primary engine remains Node.js (`tiktok-live-connector`). If **Start LIVE** fails during Room ID discovery or connection, the Node server **automatically tries the separate Python engine** using [TikTokLive](https://pypi.org/project/TikTokLive/) 7.0.1. Once connected, Python's comments, likes, gifts, follows, shares, joins and viewers are normalized into the **same** existing dashboard, webhook, `/api/v1/events`, Socket.IO and `/live` WebSocket pipeline. The UI/API `engine` field is `node`, `python`, or `none`.
+
+This is **an alternative engine, not an unconditional bypass for TikTok restrictions**. Both engines still require the broadcaster to be actively LIVE and may be blocked from the same hosting-provider IP range. Python re-resolves by **username**, even if a manual Node Room ID was entered; it does not reuse potentially stale manual IDs. Failover is performed on manual **Start LIVE**; reconnecting after a successful stream later ends requires starting it again.
+
+### Deployment on Render
+
+1. Sync the updated `render.yaml` Blueprint: it defines two web services in the same repository, `tiktok-live-konektor` (Node) and `tiktok-live-python` (Python). Both are set to free as a development default.
+2. The Blueprint generates the secret `PYTHON_BRIDGE_TOKEN` on the Python service and references it in the Node service as `PYTHON_FALLBACK_TOKEN`. It also resolves Python's `RENDER_EXTERNAL_HOSTNAME` into `PYTHON_FALLBACK_HOSTNAME` on Node. **Do not publish tokens.**
+3. Render free web services **cannot receive private-network connections**. Node therefore calls Python over `https://<python hostname>` with bearer authentication. A free service may spin down and require extra time to start; for always-on production, consider paid instances.
+4. If provisioning services manually, deploy Python with:
+   - Runtime Python 3.12; build `pip install -r python_fallback/requirements.txt`
+   - Start `uvicorn python_fallback.app:app --host 0.0.0.0 --port $PORT`
+   - `PYTHON_BRIDGE_TOKEN` set to a random secret of at least 32 characters
+   - Set on Node: `PYTHON_FALLBACK_URL=https://<python-service>.onrender.com` and `PYTHON_FALLBACK_TOKEN` to **the same** token
+5. Confirm the Python `/health` endpoint returns `{"ok":true}`. Log into the existing dashboard and click **Start LIVE** while `@jalurtarot` is broadcasting. Check `engine` from `/api/health` or authenticated `/api/v1/status`.
+
+Fallback is disabled unless the URL/hostname **and** token are configured. No Python runtime is required on the existing Node instance. Python control and event endpoints demand bearer authentication; only `/health` is public. Do not put bridge tokens in browser-side code.
+
+### Limitations and observability
+
+- The service buffers up to 2,000 events, retrieving up to 200 per poll and catching up immediately when needed. An overloaded/disconnected poll can lose events; Node logs a buffer-overrun warning.
+- If Python disconnects, the bridge reports the disconnected state instead of falsely continuing to show LIVE.
+- Both free services can sleep, and a public HTTPS request to a sleeping Python instance may exceed the initial connection timeout. Retrying **Start LIVE** is safe.
+- Python fallback is only a secondary source; it does not cure TikTok anti-bot blocks, expired sessions, offline channels, or upstream signing outages.
