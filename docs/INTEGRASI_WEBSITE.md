@@ -234,7 +234,7 @@ Untuk website publik gunakan **satu koneksi upstream di backend**, lalu fan-out 
 
 ## 6. Webhook: memicu tindakan di website lain
 
-Di dashboard admin konektor, atur webhook berbentuk:
+Webhook diatur pada konfigurasi admin yang disimpan oleh endpoint autentikasi dashboard `PUT /api/config` (menggunakan cookie sesi admin), bukan oleh REST API v1. **Saat ini frontend dashboard belum menyediakan editor webhook tersendiri**; gunakan request admin yang terautentikasi untuk memperbarui konfigurasi atau bangun editor admin terlebih dahulu. Saat mengirim `PUT /api/config`, sertakan juga `tiktokUsername` dan `tiktokRoomId` yang berlaku supaya konfigurasi akun tidak terhapus. Contoh nilai elemen array `webhooks`:
 
 ```json
 {
@@ -244,7 +244,7 @@ Di dashboard admin konektor, atur webhook berbentuk:
 }
 ```
 
-Konfigurasi webhook disimpan melalui pengaturan admin; endpoint `/api/v1/*` **tidak menyediakan** pembuatan webhook maupun kontrol LIVE untuk website lain. Konektor saat ini:
+Konfigurasi webhook disimpan melalui endpoint admin; endpoint `/api/v1/*` **tidak menyediakan** pembuatan webhook maupun kontrol LIVE untuk website lain. `PUT /api/config` tetap dilindungi sesi login admin dan tidak boleh dibuka untuk consumer publik. Konektor saat ini:
 - Mengirim `POST` JSON event via HTTPS ke URL yang terdaftar.
 - Menyertakan `x-tlk-event-id` dan `x-tlk-event-version` sebagai **metadata**, bukan bukti autentikasi.
 - Mencoba ulang saat respons gagal, dengan batas timeout/retry yang dapat dikonfigurasi.
