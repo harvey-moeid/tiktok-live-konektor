@@ -243,8 +243,19 @@ export class ManagedLiveConnection {
           if (!normalized || !STREAM_TYPES.has(normalized.event)) continue;
           // An actual webcast event is stronger proof of an active LIVE session
           // than a transport-level WebSocket 'open' or gateway 'tiktok.connect'.
-          if (!this.connected) markConnected(roomIdOf(data));
-          this.emitEvent(createEvent(normalized.event, normalized.data, { username: clean, roomId: this.roomId }));
+          const firstEvent = !this.connected;
+          if (firstEvent) markConnected(roomIdOf(data));
+          const emit = () => {
+            if (current() && this.connected) {
+              this.emitEvent(createEvent(normalized.event, normalized.data, {
+                username: clean, roomId: this.roomId
+              }));
+            }
+          };
+          // Let the controller publish the 'stream started' event before the
+          // first real event; otherwise its statistics reset loses that event.
+          if (firstEvent) queueMicrotask(emit);
+          else emit();
         }
       });
       socket.on('error', (err) => {
