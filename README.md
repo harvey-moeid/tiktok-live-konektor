@@ -206,7 +206,13 @@ When **START LIVE** is requested, the server uses a layered resolver:
 
 If `EULER_API_KEY` is configured, it is passed as `signApiKey` to the connector. On datacenter/cloud IPs, TikTok may still block or omit LIVE metadata; in that case Euler or a current manual Room ID can be used without weakening the strict Room ID validation.
 
-`tiktok-live-connector` is unofficial. Extended gift info remains disabled by default.
+\`tiktok-live-connector\` is unofficial. Extended gift info is **enabled** by default in the Node engine to fetch names, coin values and other gift metadata. TikTok may still omit metadata or block the room's gift catalogue; enrichment is best-effort and does not guarantee names for every gift.
+
+### Resolving LIVE gift names
+
+Gift events always include \`data.giftName\` and now also include \`data.giftId\` (string or null). Existing webhook, dashboard, WebSocket and overlay consumers can continue using the same \`giftName\` field. The Node engine checks current/legacy fields such as \`giftName\`, \`giftDetails.giftName\`, \`gift.name\` and \`extendedGiftInfo.name\`, then remembers confirmed names by gift ID for the current connection. The Python fallback reads its gift name/ID fields independently.
+
+When TikTok supplies a gift ID but no name, the connector reports \`Gift #5953\` (using the actual ID). When neither is present, it reports \`Gift tidak dikenal\`. It **does not invent a gift name**; if an overlay requires a specific named gift, trigger rules should also support stable gift IDs. Existing event keys including \`repeatCount\`, \`repeatEnd\`, \`giftType\`, \`diamondCount\` and \`totalValue\` are preserved.
 
 ## Runtime hardening
 
