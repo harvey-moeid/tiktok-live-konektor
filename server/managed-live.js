@@ -111,7 +111,7 @@ export class ManagedLiveConnection {
     if (!this.enabled) throw Error('EULER_API_KEY belum dikonfigurasi untuk Cloud WebSocket.');
     const clean = String(username || '').replace(/^@/, '').trim();
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(clean)) throw Error('Username TikTok tidak valid.');
-    await this.stop();
+    this.stop();
     const generation = ++this.generation;
     this.username = clean;
     this.roomId = '';
@@ -184,7 +184,7 @@ export class ManagedLiveConnection {
     });
   }
 
-  async stop() {
+  stop() {
     this.generation++;
     this.active = false;
     this.connected = false;
