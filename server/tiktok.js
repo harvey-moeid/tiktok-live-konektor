@@ -2,6 +2,7 @@ import { TikTokLiveConnection, ControlEvent, WebcastEvent } from 'tiktok-live-co
 import { broadcast } from './ws.js';
 import { createEvent, safeJsonValue } from './events.js';
 import { normalizeGiftData } from './gifts.js';
+import { EULER_BUSINESS_PLAN_MESSAGE, isEulerBusinessPlanError } from './signing-error.js';
 
 const debugEnabled = /^(1|true|yes|on)$/i.test(String(process.env.TIKTOK_DEBUG || ''));
 const eulerApiKey = String(process.env.EULER_API_KEY || '').trim();
@@ -139,7 +140,7 @@ export class TikTokService {
     on(ControlEvent.ERROR, e => {
       const d = errorDetails(e);
       console.error('[TikTok] Connector ERROR', JSON.stringify(d));
-      if (!c?.isConnected) this.setStatus('Error', d.message);
+      if (!c?.isConnected) this.setStatus('Error', isEulerBusinessPlanError(d) ? EULER_BUSINESS_PLAN_MESSAGE : d.message);
     });
     on(ControlEvent.ENTER_ROOM, d => debug('[TikTok] ENTER_ROOM room=' + String(d?.roomId || d?.room?.roomId || 'unknown')));
     on(ControlEvent.STREAM_END, () => {
@@ -281,10 +282,12 @@ export class TikTokService {
         errors: d.errors
       });
       const roomResolutionFailed = /room.?id|retrieve.?room|all sources|fetchroomid|user_not_found|19881007|404000/i.test(diagnostics);
-      const publicMessage = roomResolutionFailed && !eulerApiKey
-        ? 'Resolver TikTok native dan fallback HTML gagal dari server cloud. Pastikan @' + this.username +
-          ' sedang LIVE; jika masih gagal, tambahkan EULER_API_KEY atau masukkan Room ID LIVE manual.'
-        : d.message;
+      const publicMessage = isEulerBusinessPlanError(d)
+        ? EULER_BUSINESS_PLAN_MESSAGE
+        : roomResolutionFailed && !eulerApiKey
+          ? 'Resolver TikTok native dan fallback HTML gagal dari server cloud. Pastikan @' + this.username +
+            ' sedang LIVE; jika masih gagal, coba Room ID LIVE manual. Room ID tidak mengatasi masalah signing WebSocket.'
+          : d.message;
       this.setStatus('Error', publicMessage);
       if (publicMessage !== d.message) throw Error(publicMessage, { cause: e });
       throw e;
