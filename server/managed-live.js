@@ -90,7 +90,7 @@ export function extractManagedMessages(raw) {
 function roomIdOf(data) {
   const id = pick(data?.roomId, data?.room_id, data?.room?.roomId, data?.room?.room_id, data?.room?.id,
     data?.roomInfo?.roomId, data?.roomInfo?.id, data?.id);
-  return id && /^\\d{5,30}$/.test(String(id)) ? String(id) : '';
+  return id && /^\d{5,30}$/.test(String(id)) ? String(id) : '';
 }
 
 function safeMessageKinds(messages) {
@@ -129,6 +129,8 @@ export class ManagedLiveConnection {
     this.username = '';
     this.roomId = '';
     this.giftNames = new Map();
+    this.pendingEvents = [];
+    this.delivering = false;
   }
 
   get enabled() { return !!this.apiKey; }
@@ -142,6 +144,8 @@ export class ManagedLiveConnection {
     this.username = clean;
     this.roomId = '';
     this.giftNames.clear();
+    this.pendingEvents = [];
+    this.delivering = false;
     this.active = true;
     this.connected = false;
     // API key remains server-side; never log this URL (it includes credentials).
@@ -243,19 +247,18 @@ export class ManagedLiveConnection {
           if (!normalized || !STREAM_TYPES.has(normalized.event)) continue;
           // An actual webcast event is stronger proof of an active LIVE session
           // than a transport-level WebSocket 'open' or gateway 'tiktok.connect'.
-          const firstEvent = !this.connected;
-          if (firstEvent) markConnected(roomIdOf(data));
-          const emit = () => {
-            if (current() && this.connected) {
-              this.emitEvent(createEvent(normalized.event, normalized.data, {
-                username: clean, roomId: this.roomId
-              }));
-            }
-          };
-          // Let the controller publish the 'stream started' event before the
-          // first real event; otherwise its statistics reset loses that event.
-          if (firstEvent) queueMicrotask(emit);
-          else emit();
+          if (!this.connected) markConnected(roomIdOf(data));
+          const item = createEvent(normalized.event, normalized.data, {
+            username: clean, roomId: this.roomId
+          });
+          // Buffer until the controller has announced stream started. Async
+          // microtask ordering is insufficient across nested await/then chains.
+          if (!this.delivering) {
+            if (this.pendingEvents.length < 200) this.pendingEvents.push(item);
+            else console.warn('[managed-ws] Initial event buffer full.');
+          } else {
+            this.emitEvent(item);
+          }
         }
       });
       socket.on('error', (err) => {
@@ -273,7 +276,16 @@ export class ManagedLiveConnection {
     });
   }
 
+  flushPendingEvents() {
+    if (!this.active || !this.connected) return;
+    this.delivering = true;
+    const pending = this.pendingEvents.splice(0);
+    for (const event of pending) this.emitEvent(event);
+  }
+
   stop() {
+    this.pendingEvents = [];
+    this.delivering = false;
     this.generation++;
     this.active = false;
     this.connected = false;
