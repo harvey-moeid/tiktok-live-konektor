@@ -55,6 +55,7 @@ test('requires room.status connected, preserves username and normalized events',
   socket.emit('message', JSON.stringify({ type: 'room.status', data: { state: 'connected', roomId: '123456789012345' } }));
   const connection = await pending;
   assert.equal(connection.roomId, '123456789012345');
+  instance.flushPendingEvents();
   socket.emit('message', JSON.stringify({ messages: [
     { type: 'WebcastChatMessage', data: { user: { uniqueId: 'guest' }, comment: 'hello' } },
     { type: 'WebcastLikeMessage', data: { user: { uniqueId: 'guest' }, count: 3 } },
@@ -108,6 +109,7 @@ test('recognizes older event envelopes and roomInfo confirmation', async () => {
   socket.emit('open');
   socket.emit('message', JSON.stringify({ event: 'roomInfo', roomId: '7694790629547182868' }));
   assert.equal((await pending).roomId, '7694790629547182868');
+  instance.flushPendingEvents();
   socket.emit('message', JSON.stringify({
     messages: [{ event: 'WebcastChatMessage', data: { user: { uniqueId: 'guest' }, comment: 'halo' } }]
   }));
@@ -126,9 +128,9 @@ test('first real LIVE event confirms connection without room.status and stays de
     messages: [{ type: 'WebcastChatMessage', data: { user: { uniqueId: 'guest' }, comment: 'hello' } }]
   }));
   assert.equal((await pending).roomId, '');
-  // controller gets to handle "stream started" before emitting this first event
+  // Controller emits 'stream started', then drains the buffer atomically.
   assert.equal(events.length, 0);
-  await new Promise(resolve => setImmediate(resolve));
+  instance.flushPendingEvents();
   assert.deepEqual(events.map(x => [x.event, x.data.message]), [['chat', 'hello']]);
   instance.stop();
 });
