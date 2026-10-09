@@ -11,6 +11,8 @@ import { login, verify, setPassword } from './auth.js';
 import { dispatchWebhook, normalizeWebhooks } from './webhooks.js';
 import { attachExternalWs } from './ws.js';
 import { TikTokService } from './tiktok.js';
+import { ManagedLiveConnection } from './managed-live.js';
+import { isEulerBusinessPlanError } from './signing-error.js';
 import { normalizeEvent, createEvent } from './events.js';
 import { broadcast } from './ws.js';
 import { PythonLiveFallback } from './python-fallback.js';
@@ -60,6 +62,7 @@ function safe() {
     roomId: state.roomId || getConfig().tiktokRoomId || null,
     engine: activeEngine,
     pythonFallbackAvailable: python.enabled,
+    managedWebSocketAvailable: managed.enabled,
     running: ['Connected', 'Connecting...'].includes(state.status)
   };
 }
@@ -121,6 +124,25 @@ function handle(event) {
 }
 
 const tiktok = new TikTokService({ emitEvent: handle, setStatus });
+const managed = new ManagedLiveConnection({
+  emitEvent: event => {
+    if (activeEngine !== 'managed') return;
+    handle(event);
+    broadcast(event);
+  },
+  setStatus: (status, error) => {
+    if (activeEngine !== 'managed') return;
+    setStatus(status, error);
+    if (status === 'Disconnected' || status === 'Error') {
+      const ended = createEvent('stream', { state: 'ended' }, {
+        username: getConfig().tiktokUsername, roomId: state.roomId
+      });
+      handle(ended);
+      broadcast(ended);
+      activeEngine = 'none';
+    }
+  }
+});
 const python = new PythonLiveFallback({
   emitEvent: event => {
     if (activeEngine !== 'python') return;
@@ -154,6 +176,7 @@ app.get('/api/v1/status', apiAuth, (req, res) => {
     status: snapshot.status,
     engine: snapshot.engine,
     pythonFallbackAvailable: snapshot.pythonFallbackAvailable,
+    managedWebSocketAvailable: snapshot.managedWebSocketAvailable,
     running: snapshot.running,
     username: snapshot.username,
     roomId: snapshot.roomId,
@@ -241,8 +264,38 @@ app.post('/api/live/start', auth, async (req, res) => {
       io.emit('status', safe());
       return safe();
     } catch (nativeError) {
-      if (!python.enabled) throw nativeError;
-      console.warn('[live] Node TikTok failed; trying Python fallback:', nativeError.message);
+      let managedError = null;
+      // A Community key cannot invoke the Business-only signature endpoint,
+      // but can authenticate the independently hosted Cloud WebSocket service.
+      if (managed.enabled && isEulerBusinessPlanError(nativeError)) {
+        console.warn('[live] Node signing is Business-only; trying Community Cloud WebSocket.');
+        activeEngine = 'managed';
+        state.roomId = null;
+        setStatus('Connecting...');
+        try {
+          const connected = await managed.start(username);
+          state.roomId = connected.roomId || null;
+          const started = createEvent('stream', { state: 'started', username }, {
+            username, roomId: state.roomId
+          });
+          handle(started);
+          broadcast(started);
+          setStatus('Connected');
+          return safe();
+        } catch (error) {
+          managedError = error;
+          console.warn('[live] Managed Cloud WebSocket unavailable:', error.message);
+        }
+      }
+      if (!python.enabled) {
+        activeEngine = 'none';
+        if (!managedError) throw nativeError;
+        const combined = Error('Node: ' + String(nativeError.message || 'failed').slice(0, 250) +
+          ' | Cloud WS: ' + String(managedError.message || 'failed').slice(0, 250));
+        setStatus('Error', combined.message);
+        throw combined;
+      }
+      console.warn('[live] Trying Python fallback after Node / managed failure.');
       activeEngine = 'python';
       state.roomId = null;
       setStatus('Connecting...');
@@ -259,8 +312,9 @@ app.post('/api/live/start', auth, async (req, res) => {
       } catch (pythonError) {
         activeEngine = 'none';
         const combined = new Error(
-          'Node: ' + String(nativeError.message || 'failed').slice(0,250) +
-          ' | Python: ' + String(pythonError.message || 'failed').slice(0,250)
+          'Node: ' + String(nativeError.message || 'failed').slice(0, 250) +
+          (managedError ? ' | Cloud WS: ' + String(managedError.message || 'failed').slice(0, 250) : '') +
+          ' | Python: ' + String(pythonError.message || 'failed').slice(0, 250)
         );
         setStatus('Error', combined.message);
         throw combined;
@@ -275,7 +329,12 @@ app.post('/api/live/stop', auth, async (_, res) => {
   const run = operation.then(async () => {
     if (state.status === 'Disconnected') return safe();
     setStatus('Stopping');
-    if (activeEngine === 'python') {
+    if (activeEngine === 'managed') {
+      await managed.stop();
+      const ended = createEvent('stream', { state: 'ended' }, { username: getConfig().tiktokUsername, roomId: state.roomId });
+      handle(ended);
+      broadcast(ended);
+    } else if (activeEngine === 'python') {
       await python.stop();
       const ended = createEvent('stream', { state: 'ended' }, { username: getConfig().tiktokUsername, roomId: state.roomId });
       handle(ended);
@@ -316,6 +375,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal}`);
+  try { await managed.stop(); } catch (e) { console.warn('[shutdown] Managed disconnect failed:', e?.message || String(e)); }
   try { await python.stop(); } catch (e) { console.warn('[shutdown] Python disconnect failed:', e?.message || String(e)); }
   try { await tiktok.stop(); } catch (e) { console.warn('[shutdown] TikTok disconnect failed:', e?.message || String(e)); }
   server.close(() => process.exit(0));

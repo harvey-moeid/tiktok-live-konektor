@@ -30,7 +30,7 @@ Health check: `GET /api/health`
 - `ADMIN_PASSWORD`: dashboard password used on first startup when no stored password hash exists.
 - `WS_TOKEN`: long random token for the external WebSocket.
 - `TIKTOK_USERNAME`: default TikTok username.
-- `EULER_API_KEY`: optional Eulerstream API key for room discovery/signing. **A Community key does not grant Business-only signature access.** Check the entitlement of your Eulerstream plan before relying on this for production WebSocket connections.
+- `EULER_API_KEY`: server-side Eulerstream API key. A Community key does NOT authorize Business signing, but can be used for the separate managed Cloud WebSocket fallback implemented here. Actual access and quotas depend on your Eulerstream account.
 
 Optional runtime controls are documented in `.env.example`, including `TIKTOK_ROOM_ID`, `MAX_FEED_EVENTS`, `MAX_EVENT_BYTES`, `TIKTOK_HTTP_TIMEOUT_MS`, `WEBHOOK_TIMEOUT_MS`, `WEBHOOK_RETRIES`, and `TIKTOK_DEBUG`.
 
@@ -214,9 +214,9 @@ If the LIVE dashboard shows `This endpoint requires a Business plan`, Eulerstrea
 
 - **Paid path:** confirm the Eulerstream account has access to TikTok LIVE Signature routes (see [Eulerstream pricing](https://www.eulerstream.com/pricing)); use a properly entitled API key server-side.
 - **Alternative path:** configure `PYTHON_FALLBACK_URL` and `PYTHON_FALLBACK_TOKEN` and deploy the separate Python bridge below. Node automatically attempts Python if signing fails; Python uses its own TikTokLive connection machinery, **but is not guaranteed to bypass signer entitlements or TikTok restrictions**.
-- **Community managed WebSockets:** Eulerstream lists hosted Cloud WebSockets separately from its Business-only signature route. Using that feature would require a separate integration, which **is not present in this repository**. It is not an automatic switch for `signApiKey`.
+- **Community managed WebSockets:** Eulerstream lists hosted Cloud WebSockets separately from its Business-only signature route. The connector now **automatically tries this separate Cloud WebSocket when the Node signer returns the Business-plan error and `EULER_API_KEY` is configured**. This is not an override of the signing endpoint, and connection success still depends on the Cloud WebSocket service accepting your API key and TikTok LIVE being active.
 
-The dashboard now distinguishes this entitlement error from Room ID resolution errors. If Python is disabled or also fails, the connector cannot receive live events until a working, properly authorized connection method is configured. Normalized webhook/event contracts remain unchanged.
+The dashboard distinguishes entitlement errors from Room ID resolution errors. The connection sequence is **Node → Cloud WebSocket on Business-plan errors → optional Python fallback**. The status API returns `engine: managed` when the Cloud WebSocket connects, and the normalized event shape remains unchanged. If all sources fail, the connector cannot receive LIVE events until a working authorized connection method is configured. Normalized webhook/event contracts remain unchanged.
 
 ### Resolving LIVE gift names
 
