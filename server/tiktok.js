@@ -1,6 +1,7 @@
 import { TikTokLiveConnection, ControlEvent, WebcastEvent } from 'tiktok-live-connector';
 import { broadcast } from './ws.js';
 import { createEvent, safeJsonValue } from './events.js';
+import { normalizeGiftData } from './gifts.js';
 
 const debugEnabled = /^(1|true|yes|on)$/i.test(String(process.env.TIKTOK_DEBUG || ''));
 const eulerApiKey = String(process.env.EULER_API_KEY || '').trim();
@@ -101,6 +102,7 @@ export class TikTokService {
     this.username = '';
     this.roomId = '';
     this.streamActive = false;
+    this.giftNames = new Map();
   }
 
   emit(type, data) {
@@ -152,19 +154,12 @@ export class TikTokService {
       message: commentOf(d)
     }));
     on(WebcastEvent.GIFT, d => {
-      const gift = d?.giftDetails || d?.gift || d?.extendedGiftInfo || {};
-      const repeatCount = numberOf(d?.repeatCount, d?.repeat_count, 1) || 1;
-      const diamondCount = numberOf(d?.diamondCount, d?.diamond_count, gift?.diamondCount, gift?.diamond_count);
-      const giftType = numberOf(d?.giftType, d?.gift_type, gift?.giftType, gift?.gift_type);
+      const gift = normalizeGiftData(d, this.giftNames);
+      if (debugEnabled && gift.giftName.startsWith('Gift #')) {
+        debug('[TikTok] Gift name unavailable; giftId=' + (gift.giftId || 'missing'));
+      }
       this.emit('gift', {
-        username: usernameOf(d), nickname: nicknameOf(d),
-        giftName: String(first(d?.giftName, gift?.giftName, d?.extendedGiftInfo?.name) || 'Unknown'),
-        repeatCount,
-        repeatEnd: Boolean(d?.repeatEnd ?? d?.repeat_end),
-        giftType,
-        streakable: giftType === 1,
-        diamondCount,
-        totalValue: diamondCount * repeatCount
+        username: usernameOf(d), nickname: nicknameOf(d), ...gift
       });
     });
     on(WebcastEvent.LIKE, d => this.emit('like', {
@@ -219,6 +214,7 @@ export class TikTokService {
   async start(username, roomId = '') {
     if (this.running || this.connection) await this.stop();
     this.username = String(username || '').replace(/^@/, '').trim();
+    this.giftNames.clear();
     let explicitRoomId = String(roomId || '').trim();
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(this.username)) throw Error('Username TikTok tidak valid.');
     if (explicitRoomId && !/^\d{5,30}$/.test(explicitRoomId)) throw Error('Room ID TikTok harus berupa angka.');
@@ -227,7 +223,9 @@ export class TikTokService {
     this.running = true;
     const timeoutMs = requestTimeoutMs();
     this.connection = new TikTokLiveConnection(this.username, {
-      enableExtendedGiftInfo: false,
+      // Load TikTok's room gift catalogue so gift names are available even when
+      // the base webcast payload only carries an ID.
+      enableExtendedGiftInfo: true,
       processInitialData: true,
       fetchRoomInfoOnConnect: true,
       authenticateWs: false,
