@@ -51,7 +51,7 @@ test('requires room.status connected, preserves username and normalized events',
   const { instance, events, calls, statuses } = bridge(socket);
   const pending = instance.start('some_live');
   socket.emit('open');
-  socket.emit('message', JSON.stringify({ type: 'WebcastChatMessage', data: { comment: 'premature' } }));
+  socket.emit('message', JSON.stringify({ type: 'tiktok.connect', data: { agentId: 'gateway-1' } }));
   socket.emit('message', JSON.stringify({ type: 'room.status', data: { state: 'connected', roomId: '123456789012345' } }));
   const connection = await pending;
   assert.equal(connection.roomId, '123456789012345');
