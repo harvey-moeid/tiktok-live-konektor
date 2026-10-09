@@ -30,7 +30,7 @@ Health check: `GET /api/health`
 - `ADMIN_PASSWORD`: dashboard password used on first startup when no stored password hash exists.
 - `WS_TOKEN`: long random token for the external WebSocket.
 - `TIKTOK_USERNAME`: default TikTok username.
-- `EULER_API_KEY`: strongly recommended on cloud hosts for reliable Room ID resolution/signing; a Community key is sufficient for normal use.
+- `EULER_API_KEY`: optional Eulerstream API key for room discovery/signing. **A Community key does not grant Business-only signature access.** Check the entitlement of your Eulerstream plan before relying on this for production WebSocket connections.
 
 Optional runtime controls are documented in `.env.example`, including `TIKTOK_ROOM_ID`, `MAX_FEED_EVENTS`, `MAX_EVENT_BYTES`, `TIKTOK_HTTP_TIMEOUT_MS`, `WEBHOOK_TIMEOUT_MS`, `WEBHOOK_RETRIES`, and `TIKTOK_DEBUG`.
 
@@ -204,9 +204,19 @@ When **START LIVE** is requested, the server uses a layered resolver:
 4. Once a Room ID is resolved, `connect(roomId)` is used so the connection does not repeat Room ID discovery.
 5. `fetchRoomInfoOnConnect` remains enabled so the resolved room is still validated as a LIVE room.
 
-If `EULER_API_KEY` is configured, it is passed as `signApiKey` to the connector. On datacenter/cloud IPs, TikTok may still block or omit LIVE metadata; in that case Euler or a current manual Room ID can be used without weakening the strict Room ID validation.
+If `EULER_API_KEY` is configured, it is passed as `signApiKey` to the connector. On datacenter/cloud IPs, TikTok may still block or omit LIVE metadata. A current manual Room ID can help with *discovery*, but it **cannot** replace WebSocket signing or override an Eulerstream Business-plan requirement.
 
 \`tiktok-live-connector\` is unofficial. Extended gift info is **enabled** by default in the Node engine to fetch names, coin values and other gift metadata. TikTok may still omit metadata or block the room's gift catalogue; enrichment is best-effort and does not guarantee names for every gift.
+
+### Error: `fetchWebcastSignatureFromEulerRoute` requires a Business plan
+
+If the LIVE dashboard shows `This endpoint requires a Business plan`, Eulerstream has **denied signature access** to the API key/route used by the Node connector. This is **not** an incorrect TikTok username, gift name, Room ID or webhook error, and it is not resolved by repeatedly restarting the app. This connector currently uses a signed WebSocket route; it does not implement an unsigned HTTP polling transport.
+
+- **Paid path:** confirm the Eulerstream account has access to TikTok LIVE Signature routes (see [Eulerstream pricing](https://www.eulerstream.com/pricing)); use a properly entitled API key server-side.
+- **Alternative path:** configure `PYTHON_FALLBACK_URL` and `PYTHON_FALLBACK_TOKEN` and deploy the separate Python bridge below. Node automatically attempts Python if signing fails; Python uses its own TikTokLive connection machinery, **but is not guaranteed to bypass signer entitlements or TikTok restrictions**.
+- **Community managed WebSockets:** Eulerstream lists hosted Cloud WebSockets separately from its Business-only signature route. Using that feature would require a separate integration, which **is not present in this repository**. It is not an automatic switch for `signApiKey`.
+
+The dashboard now distinguishes this entitlement error from Room ID resolution errors. If Python is disabled or also fails, the connector cannot receive live events until a working, properly authorized connection method is configured. Normalized webhook/event contracts remain unchanged.
 
 ### Resolving LIVE gift names
 
