@@ -17,6 +17,6 @@ export function isEulerBusinessPlanError(details) {
   } catch {
     message = String(details || '');
   }
-  return /requires?\\s+(?:a\\s+)?business\\s+plan/i.test(message) &&
+  return /requires?\s+(?:a\s+)?business\s+plan/i.test(message) &&
     /(?:eulerstream|fetchWebcastSignatureFromEulerRoute|sign(?:ature|ing)?|endpoint)/i.test(message);
 }
