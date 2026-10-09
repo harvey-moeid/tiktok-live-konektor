@@ -22,7 +22,7 @@ function actor(data) {
 // shorthand event types exposed to webhook/overlay clients by this app.
 export function normalizeManagedMessage(type, data, giftNames = new Map()) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
-  const name = String(type || '').replace(/^Webcast/, '').replace(/Message$/, '').toLowerCase();
+  const name = String(type || '').replace(/^Webcast/i, '').replace(/Message$/i, '').replace(/^tiktok[._-]/i, '').toLowerCase();
   const person = actor(data);
   switch (name) {
     case 'chat':
@@ -55,21 +55,47 @@ export function normalizeManagedMessage(type, data, giftNames = new Map()) {
   }
 }
 
-// Accept the gateway's bundled {messages:[{type,data}]} and unbundled shapes.
-// Ignore unsupported metadata events; never broadcast untrusted raw frames.
+// Eulerstream can send bundled or single JSON events. Historical gateway
+// releases use `event` rather than `type`, notably for `roomInfo`.
+// All event payloads must remain bounded; never relay the raw gateway envelope.
 export function extractManagedMessages(raw) {
   if (Buffer.isBuffer(raw) && raw.byteLength > 256 * 1024) return [];
+  if (typeof raw === 'string' && Buffer.byteLength(raw) > 256 * 1024) return [];
   let value;
   try { value = JSON.parse(String(raw)); } catch { return []; }
   const result = [];
-  const visit = (item) => {
-    if (!item || typeof item !== 'object' || result.length >= 200) return;
-    if (Array.isArray(item)) { for (const x of item.slice(0, 200)) visit(x); return; }
-    if (Array.isArray(item.messages)) { for (const x of item.messages.slice(0, 200)) visit(x); return; }
-    if (typeof item.type === 'string') result.push({ type: item.type, data: item.data });
+  const visit = (item, depth = 0) => {
+    if (!item || typeof item !== 'object' || depth > 4 || result.length >= 200) return;
+    if (Array.isArray(item)) {
+      for (const child of item.slice(0, 200)) visit(child, depth + 1);
+      return;
+    }
+    if (Array.isArray(item.messages)) {
+      for (const child of item.messages.slice(0, 200)) visit(child, depth + 1);
+      return;
+    }
+    const type = pick(item.type, item.event);
+    if (typeof type !== 'string') return;
+    const data = item.data && typeof item.data === 'object'
+      ? item.data
+      : item.payload && typeof item.payload === 'object'
+        ? item.payload
+        : item;
+    result.push({ type, data });
   };
   visit(value);
   return result;
+}
+
+function roomIdOf(data) {
+  const id = pick(data?.roomId, data?.room_id, data?.room?.roomId, data?.room?.room_id, data?.room?.id,
+    data?.roomInfo?.roomId, data?.roomInfo?.id, data?.id);
+  return id && /^\d{5,30}$/.test(String(id)) ? String(id) : '';
+}
+
+function safeMessageKinds(messages) {
+  return [...new Set(messages.map(m => String(m.type || '').slice(0, 64))
+    .filter(t => /^[A-Za-z0-9._-]{1,64}$/.test(t)))].slice(0, 8);
 }
 
 const CLOSED = new Map([
@@ -89,7 +115,7 @@ export function managedCloseReason(code, reason = '') {
 export class ManagedLiveConnection {
   constructor({ apiKey = process.env.EULER_API_KEY, emitEvent = () => {}, setStatus = () => {},
     socketFactory = (url, options) => new WebSocket(url, options),
-    urlFactory = createWebSocketUrl, timeoutMs = 25000 } = {}) {
+    urlFactory = createWebSocketUrl, timeoutMs = 35000 } = {}) {
     this.apiKey = String(apiKey || '').trim();
     this.emitEvent = emitEvent;
     this.setStatus = setStatus;
@@ -103,6 +129,8 @@ export class ManagedLiveConnection {
     this.username = '';
     this.roomId = '';
     this.giftNames = new Map();
+    this.pendingEvents = [];
+    this.delivering = false;
   }
 
   get enabled() { return !!this.apiKey; }
@@ -116,6 +144,8 @@ export class ManagedLiveConnection {
     this.username = clean;
     this.roomId = '';
     this.giftNames.clear();
+    this.pendingEvents = [];
+    this.delivering = false;
     this.active = true;
     this.connected = false;
     // API key remains server-side; never log this URL (it includes credentials).
@@ -124,6 +154,16 @@ export class ManagedLiveConnection {
     return new Promise((resolve, reject) => {
       let settled = false;
       let timer;
+      let socketOpened = false;
+      let framesReceived = 0;
+      let framesParsed = 0;
+      const kinds = new Set();
+      const markConnected = (roomId = '') => {
+        if (!current()) return;
+        if (roomId) this.roomId = roomId;
+        this.connected = true;
+        finish();
+      };
       const finish = (error) => {
         if (settled) return;
         settled = true;
@@ -145,16 +185,43 @@ export class ManagedLiveConnection {
         else if (wasConnected) this.setStatus('Error', msg);
         try { socket.close(); } catch {}
       };
-      timer = setTimeout(() => fail('Cloud WebSocket tidak mengonfirmasi status LIVE dalam batas waktu.'), this.timeoutMs);
+      timer = setTimeout(() => {
+        const detail = !socketOpened
+          ? 'Gateway Eulerstream tidak berhasil membuka koneksi WebSocket.'
+          : !framesReceived
+            ? 'WebSocket Eulerstream terbuka tetapi tidak menerima pesan LIVE.'
+            : 'WebSocket Eulerstream menerima pesan, tetapi tidak menemukan status atau event LIVE yang valid.';
+        console.warn('[managed-ws] Handshake diagnostic', JSON.stringify({
+          opened: socketOpened, framesReceived, framesParsed, kinds: [...kinds]
+        }));
+        fail(detail + ' Pastikan akun sedang LIVE dan akses Cloud WebSocket tersedia.');
+      }, this.timeoutMs);
+      socket.on('open', () => {
+        if (current()) {
+          socketOpened = true;
+          console.info('[managed-ws] Transport opened for @' + clean);
+        }
+      });
       socket.on('message', (frame) => {
         if (!current()) return;
-        for (const { type, data } of extractManagedMessages(frame)) {
-          if (type === 'room.status') {
+        framesReceived++;
+        const messages = extractManagedMessages(frame);
+        framesParsed += messages.length;
+        for (const type of safeMessageKinds(messages)) {
+          if (kinds.size < 12) kinds.add(type);
+        }
+        // Metadata only; never log raw frames, actor details or API keys.
+        if (framesReceived === 1) {
+          console.info('[managed-ws] First frame', JSON.stringify({
+            parsed: messages.length, kinds: safeMessageKinds(messages)
+          }));
+        }
+        for (const { type, data } of messages) {
+          const eventType = String(type || '').toLowerCase();
+          if (eventType === 'room.status' || eventType === 'roomstatus') {
             const state = String(data?.state || '').toLowerCase();
-            if (state === 'connected') {
-              this.roomId = String(data?.roomId || this.roomId || '');
-              this.connected = true;
-              finish();
+            if (state === 'connected' || state === 'live') {
+              markConnected(roomIdOf(data));
               continue;
             }
             if (state === 'ended' || state === 'offline' || state === 'error') {
@@ -163,10 +230,35 @@ export class ManagedLiveConnection {
             }
             continue;
           }
-          if (!this.connected) continue;
+          if (eventType === 'roominfo' || eventType === 'room.info') {
+            const roomId = roomIdOf(data);
+            if (data?.isLive === false || data?.is_live === false) {
+              fail('Gateway Eulerstream menyatakan akun TikTok belum LIVE.');
+              return;
+            }
+            if (roomId) markConnected(roomId);
+            continue;
+          }
+          if (eventType === 'error' || eventType === 'tiktok.error') {
+            fail('Gateway Eulerstream mengirim error: ' + String(data?.message || data?.error || 'unknown').slice(0, 160));
+            return;
+          }
           const normalized = normalizeManagedMessage(type, data, this.giftNames);
           if (!normalized || !STREAM_TYPES.has(normalized.event)) continue;
-          this.emitEvent(createEvent(normalized.event, normalized.data, { username: clean, roomId: this.roomId }));
+          // An actual webcast event is stronger proof of an active LIVE session
+          // than a transport-level WebSocket 'open' or gateway 'tiktok.connect'.
+          if (!this.connected) markConnected(roomIdOf(data));
+          const item = createEvent(normalized.event, normalized.data, {
+            username: clean, roomId: this.roomId
+          });
+          // Buffer until the controller has announced stream started. Async
+          // microtask ordering is insufficient across nested await/then chains.
+          if (!this.delivering) {
+            if (this.pendingEvents.length < 200) this.pendingEvents.push(item);
+            else console.warn('[managed-ws] Initial event buffer full.');
+          } else {
+            this.emitEvent(item);
+          }
         }
       });
       socket.on('error', (err) => {
@@ -184,7 +276,16 @@ export class ManagedLiveConnection {
     });
   }
 
+  flushPendingEvents() {
+    if (!this.active || !this.connected) return;
+    this.delivering = true;
+    const pending = this.pendingEvents.splice(0);
+    for (const event of pending) this.emitEvent(event);
+  }
+
   stop() {
+    this.pendingEvents = [];
+    this.delivering = false;
     this.generation++;
     this.active = false;
     this.connected = false;

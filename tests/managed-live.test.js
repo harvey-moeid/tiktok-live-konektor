@@ -51,10 +51,11 @@ test('requires room.status connected, preserves username and normalized events',
   const { instance, events, calls, statuses } = bridge(socket);
   const pending = instance.start('some_live');
   socket.emit('open');
-  socket.emit('message', JSON.stringify({ type: 'WebcastChatMessage', data: { comment: 'premature' } }));
+  socket.emit('message', JSON.stringify({ type: 'tiktok.connect', data: { agentId: 'gateway-1' } }));
   socket.emit('message', JSON.stringify({ type: 'room.status', data: { state: 'connected', roomId: '123456789012345' } }));
   const connection = await pending;
   assert.equal(connection.roomId, '123456789012345');
+  instance.flushPendingEvents();
   socket.emit('message', JSON.stringify({ messages: [
     { type: 'WebcastChatMessage', data: { user: { uniqueId: 'guest' }, comment: 'hello' } },
     { type: 'WebcastLikeMessage', data: { user: { uniqueId: 'guest' }, count: 3 } },
@@ -98,4 +99,68 @@ test('missing API key disallows managed connection and avoids accidental anonymo
   const instance = new ManagedLiveConnection({ apiKey: '' });
   assert.equal(instance.enabled, false);
   await assert.rejects(instance.start('some_live'), /EULER_API_KEY/);
+});
+
+
+test('recognizes older event envelopes and roomInfo confirmation', async () => {
+  const socket = fake();
+  const { instance, events } = bridge(socket);
+  const pending = instance.start('some_live');
+  socket.emit('open');
+  socket.emit('message', JSON.stringify({ event: 'roomInfo', roomId: '7694790629547182868' }));
+  assert.equal((await pending).roomId, '7694790629547182868');
+  instance.flushPendingEvents();
+  socket.emit('message', JSON.stringify({
+    messages: [{ event: 'WebcastChatMessage', data: { user: { uniqueId: 'guest' }, comment: 'halo' } }]
+  }));
+  assert.equal(events.length, 1);
+  assert.equal(events[0].event, 'chat');
+  assert.equal(events[0].roomId, '7694790629547182868');
+  instance.stop();
+});
+
+test('first real LIVE event confirms connection without room.status and stays deliverable', async () => {
+  const socket = fake();
+  const { instance, events } = bridge(socket);
+  const pending = instance.start('some_live');
+  socket.emit('open');
+  socket.emit('message', JSON.stringify({
+    messages: [{ type: 'WebcastChatMessage', data: { user: { uniqueId: 'guest' }, comment: 'hello' } }]
+  }));
+  assert.equal((await pending).roomId, '');
+  // Controller emits 'stream started', then drains the buffer atomically.
+  assert.equal(events.length, 0);
+  instance.flushPendingEvents();
+  assert.deepEqual(events.map(x => [x.event, x.data.message]), [['chat', 'hello']]);
+  instance.stop();
+});
+
+test('tiktok.connect only proves gateway transport, not active LIVE', async () => {
+  const socket = fake();
+  const { instance } = bridge(socket, { timeoutMs: 18 });
+  const pending = instance.start('some_live');
+  socket.emit('open');
+  socket.emit('message', JSON.stringify({ type: 'tiktok.connect', data: { agentId: 'abc' } }));
+  await assert.rejects(pending, /tidak menemukan status atau event LIVE/);
+});
+
+test('timeout distinguishes a socket with no data from an unopened transport', async () => {
+  const openedSocket = fake();
+  const opened = bridge(openedSocket, { timeoutMs: 15 });
+  const ready = opened.instance.start('some_live');
+  openedSocket.emit('open');
+  await assert.rejects(ready, /terbuka tetapi tidak menerima pesan LIVE/);
+
+  const missingSocket = fake();
+  const missing = bridge(missingSocket, { timeoutMs: 15 });
+  await assert.rejects(missing.instance.start('some_live'), /tidak berhasil membuka koneksi/);
+});
+
+test('handles legacy single-message event envelope without leaking the raw frame', () => {
+  const frames = extractManagedMessages(JSON.stringify({
+    event: 'gift', data: { giftId: 5655, giftName: 'Rose', repeatCount: 2 }
+  }));
+  assert.equal(frames.length, 1);
+  assert.equal(normalizeManagedMessage(frames[0].type, frames[0].data).data.giftName, 'Rose');
+  assert.deepEqual(extractManagedMessages('x'.repeat(256 * 1024 + 1)), []);
 });

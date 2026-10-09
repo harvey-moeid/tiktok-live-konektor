@@ -281,6 +281,7 @@ app.post('/api/live/start', auth, async (req, res) => {
           handle(started);
           broadcast(started);
           setStatus('Connected');
+          managed.flushPendingEvents();
           return safe();
         } catch (error) {
           managedError = error;
