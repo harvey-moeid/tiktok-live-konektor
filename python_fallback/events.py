@@ -24,6 +24,30 @@ def _identity(event):
     }
 
 
+def _gift_id(event, gift):
+    extended = _value(event, "extended_gift_info", "extendedGiftInfo")
+    for source in (event, gift, _value(gift, "info"), extended):
+        if source is None:
+            continue
+        candidate = _value(source, "gift_id", "giftId", "id" if source is not event else "gift_id")
+        if candidate is not None and str(candidate).isdigit() and int(candidate) > 0:
+            return str(candidate)
+    return None
+
+
+def _gift_name(event, gift, gift_id):
+    extended = _value(event, "extended_gift_info", "extendedGiftInfo")
+    for source in (event, gift, _value(gift, "info"), extended):
+        if source is None:
+            continue
+        value = _value(source, "gift_name", "giftName", "name")
+        if isinstance(value, str):
+            name = value.strip()
+            if name and name.lower() not in {"unknown", "undefined", "null", "none", "n/a", "gift"}:
+                return name[:200]
+    return f"Gift #{gift_id}" if gift_id else "Gift tidak dikenal"
+
+
 def normalize_event(event_type, event):
     who = _identity(event)
     if event_type == "chat":
@@ -39,8 +63,9 @@ def normalize_event(event_type, event):
         if streakable and bool(_value(event, "streaking", default=False)):
             return None  # One final event per streak; do not double-count.
         count = max(_int(_value(event, "repeat_count", default=1), 1), 1)
-        coins = _int(_value(gift, "diamond_count", default=0))
-        return {**who, "giftName": str(_value(gift, "name", default="Unknown")),
+        coins = _int(_value(gift, "diamond_count", "diamondCount", default=0))
+        gift_id = _gift_id(event, gift)
+        return {**who, "giftId": gift_id, "giftName": _gift_name(event, gift, gift_id),
                 "repeatCount": count, "repeatEnd": True,
                 "giftType": _int(_value(gift, "type", default=0)),
                 "streakable": streakable, "diamondCount": coins, "totalValue": coins * count}
