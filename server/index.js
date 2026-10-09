@@ -74,8 +74,10 @@ function resetStats() {
 }
 function addGift(d) {
   const username = String(d.username || 'unknown');
-  const giftName = String(d.giftName || 'Unknown');
-  const key = username + '|' + giftName;
+  // Use the stable gift ID for streak accounting. A late metadata lookup can
+  // replace a placeholder name mid-streak without creating a second streak.
+  const giftKey = String(d.giftId || d.giftName || 'Unknown');
+  const key = username + '|' + giftKey;
   const repeatCount = Math.max(Number(d.repeatCount) || 1, 1);
   const previous = giftStreaks.get(key) || 0;
   const delta = Math.max(repeatCount - previous, 0);
