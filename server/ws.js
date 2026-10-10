@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { serializeEvent } from './events.js';
+import { clientIp } from './security.js';
 
 let wss;
+let heartbeat;
 let getTokens = () => [];
 let isOriginAllowed = () => true;
 const clientsByIp = new Map();
@@ -19,10 +21,6 @@ export function parseEventTypes(value) {
   if (!requested.length) return null;
   const filtered = requested.filter(x => EXTERNAL_EVENT_TYPES.has(x));
   return new Set(filtered.length ? filtered : ['chat','like','gift']);
-}
-
-function clientIp(req) {
-  return String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim() || 'unknown';
 }
 
 function pruneExpired(now) {
@@ -95,11 +93,12 @@ export function attachExternalWs(server, tokenProvider, originProvider = () => t
       ws.isAlive = true;
       ws.eventTypes = parseEventTypes(u.searchParams.get('events') || u.searchParams.get('types'));
       ws.on('pong', () => { ws.isAlive = true; });
+      ws.on('error', () => ws.terminate());
       wss.emit('connection', ws, req);
     });
   });
 
-  const heartbeat = setInterval(() => {
+  heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
       if (!ws.isAlive) { ws.terminate(); continue; }
       ws.isAlive = false;
@@ -112,6 +111,13 @@ export function attachExternalWs(server, tokenProvider, originProvider = () => t
   return wss;
 }
 
+export function closeExternalWs() {
+  clearInterval(heartbeat);
+  for (const client of wss?.clients || []) client.terminate();
+  wss?.close();
+  clientsByIp.clear();
+}
+
 export function broadcast(event) {
   if (!wss) return;
   let message;
@@ -121,6 +127,7 @@ export function broadcast(event) {
   }
   for (const client of wss.clients) {
     if (client.readyState !== 1) continue;
+    if (client.bufferedAmount > 1024 * 1024) { client.terminate(); continue; }
     if (client.eventTypes && !client.eventTypes.has(String(event?.event || '').toLowerCase())) continue;
     try { client.send(message); } catch (e) { console.warn('[ws] Send failed:', e?.message || String(e)); }
   }

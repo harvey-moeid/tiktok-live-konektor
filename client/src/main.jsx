@@ -1,8 +1,9 @@
-import React,{useEffect,useMemo,useState}from'react';
+import React,{useCallback,useEffect,useMemo,useState}from'react';
 import{createRoot}from'react-dom/client';
 import{io}from'socket.io-client';
 import'./styles.css';
 import WebhookSettings from './WebhookSettings.jsx';
+import { api } from './api.js';
 
 const filters=[
   ['all','Semua'],['chat','Komentar'],['like','Like'],['gift','Gift'],
@@ -12,24 +13,17 @@ const visibleTypes=new Set(filters.slice(1).map(x=>x[0]));
 const labels={chat:'Komentar',like:'Like',gift:'Gift',follow:'Follow',share:'Share',member:'Masuk',viewer:'Viewer',stream:'LIVE'};
 const icons={chat:'💬',like:'♥',gift:'🎁',follow:'＋',share:'↗',member:'👋',viewer:'◉',stream:'●'};
 
-async function api(path,options={}){
-  const r=await fetch(path,{credentials:'include',headers:{'content-type':'application/json'},...options});
-  const d=await r.json().catch(()=>({}));
-  if(!r.ok)throw Error(d.error||'HTTP '+r.status);
-  return d;
-}
-
 function Login({done}){
-  const[u,setU]=useState('admin'),[p,setP]=useState(''),[e,setE]=useState('');
+  const[u,setU]=useState('admin'),[p,setP]=useState(''),[e,setE]=useState(''),[pending,setPending]=useState(false);
   return <main className="auth"><form onSubmit={async x=>{
-    x.preventDefault();setE('');
+    x.preventDefault();if(pending)return;setE('');setPending(true);
     try{await api('/api/auth/login',{method:'POST',body:JSON.stringify({username:u,password:p})});done()}
-    catch(err){setE(err.message)}
+    catch(err){setE(err.message)}finally{setPending(false)}
   }}>
     <div className="brand"><span className="brand-mark">TLK</span><div><h1>TikTok Live Konektor</h1><p>Realtime event bridge</p></div></div>
-    <label>Username</label><input autoComplete="username"value={u}onChange={x=>setU(x.target.value)}placeholder="Username"/>
-    <label>Password</label><input autoComplete="current-password"type="password"value={p}onChange={x=>setP(x.target.value)}placeholder="Password"/>
-    {e&&<div className="error">{e}</div>}<button className="primary">Masuk</button>
+    <label htmlFor="login-username">Username</label><input id="login-username" autoComplete="username" required maxLength={64} value={u}onChange={x=>setU(x.target.value)}placeholder="Username"/>
+    <label htmlFor="login-password">Password</label><input id="login-password" autoComplete="current-password" required type="password"value={p}onChange={x=>setP(x.target.value)}placeholder="Password"/>
+    {e&&<div className="error" role="alert">{e}</div>}<button className="primary" disabled={pending}>{pending?'Memeriksa…':'Masuk'}</button>
   </form></main>
 }
 
@@ -90,9 +84,10 @@ function Dashboard({logout}){
   const[s,setS]=useState(),[c,setC]=useState(),[events,setEvents]=useState([]),[f,setF]=useState('all'),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
   const[tab,setTab]=useState('live'),[configError,setConfigError]=useState('');
   const[historyBusy,setHistoryBusy]=useState(''),[historyFeedback,setHistoryFeedback]=useState(null);
+  const[stateError,setStateError]=useState('');
   useEffect(()=>{
     let mounted=true;
-    api('/api/state').then(x=>mounted&&setS(x)).catch(logout);
+    api('/api/state').then(x=>mounted&&setS(x)).catch(e=>mounted&&setStateError(e.message));
     api('/api/config').then(x=>mounted&&setC(x)).catch(e=>mounted&&setConfigError(e.message));
     const socket=io({path:'/socket.io',withCredentials:true,reconnection:true,reconnectionAttempts:Infinity});
     socket.on('state',x=>setS(x));
@@ -102,13 +97,14 @@ function Dashboard({logout}){
     socket.on('history',x=>setEvents(Array.isArray(x)?x:[]));
     socket.on('history:removed',x=>setEvents(v=>v.filter(item=>item.id!==x?.id)));
     socket.on('history:cleared',()=>setEvents([]));
-    socket.on('connect_error',()=>setNotice('Koneksi realtime terputus. Menghubungkan kembali…'));
+    socket.on('connect_error',e=>{if(e.message==='Unauthorized')logout();else setNotice('Koneksi realtime terputus. Menghubungkan kembali…')});
+    socket.on('disconnect',reason=>{if(reason==='io server disconnect')logout();else setNotice('Koneksi realtime terputus. Menghubungkan kembali…')});
     socket.on('connect',()=>setNotice(''));
     return()=>{mounted=false;socket.close()};
   },[logout]);
 
   const list=useMemo(()=>events.filter(x=>visibleTypes.has(x.event)&&(f==='all'||x.event===f)).slice().reverse(),[events,f]);
-  if(!s)return <main className="loading">Loading…</main>;
+  if(!s)return <main className="loading">{stateError||'Loading…'}{stateError&&<button onClick={async()=>{try{setS(await api('/api/state'));setStateError('')}catch(e){setStateError(e.message)}}}>Coba lagi</button>}</main>;
 
   async function removeActivity(item){
     if(historyBusy||!item?.id)return;
@@ -150,7 +146,7 @@ function Dashboard({logout}){
     setBusy(true);
     try{
       const x=await api('/api/config',{method:'PUT',body:JSON.stringify({tiktokUsername:c?.tiktokUsername||'',tiktokRoomId:c?.tiktokRoomId||''})});
-      setC(x);setS(v=>({...v,username:x.tiktokUsername,roomId:x.tiktokRoomId||null}));setNotice('Konfigurasi tersimpan');
+      setC(x);setS(v=>({...v,username:x.tiktokUsername,roomId:v.running?v.roomId:x.tiktokRoomId||null}));setNotice('Konfigurasi tersimpan');
     }catch(e){setNotice(e.message)}finally{setBusy(false)}
   }
 
@@ -172,7 +168,7 @@ function Dashboard({logout}){
     <header>
       <div className="brand compact-brand"><span className="brand-mark">TLK</span><div><strong>TikTok Live Konektor</strong><small>Realtime dashboard</small></div></div>
       <div className={'status '+(connected?'online':'offline')}><i></i><span>{s.status}</span><b>@{c?.tiktokUsername||s.username||'—'}</b></div>
-      <button className="ghost" onClick={async()=>{try{await api('/api/auth/logout',{method:'POST'})}finally{logout()}}}>Logout</button>
+      <button className="ghost" onClick={async()=>{try{await api('/api/auth/logout',{method:'POST'});logout()}catch(e){setNotice(e.message)}}}>Logout</button>
     </header>
 
     <nav className="dashboard-tabs" role="tablist" aria-label="Menu dashboard">
@@ -190,7 +186,8 @@ function Dashboard({logout}){
           <label>Room ID <em>opsional</em></label>
           <input inputMode="numeric"value={c?.tiktokRoomId||''}onChange={e=>setC(v=>({...v,tiktokRoomId:e.target.value.replace(/\D/g,'')}))}placeholder="Kosongkan untuk otomatis"/>
           <small className="hint">Biarkan kosong bila resolver otomatis aktif.</small>
-          <div className="buttons"><button className="secondary" onClick={save}disabled={busy}>Simpan</button>{s.running?<button className="danger" onClick={stop}disabled={busy}>Stop LIVE</button>:<button className="primary" onClick={start}disabled={busy}>{busy?'Menghubungkan…':'Start LIVE'}</button>}</div>
+          <div className="buttons"><button className="secondary" onClick={save}disabled={busy||!c}>Simpan</button>{s.running?<button className="danger" onClick={stop}disabled={busy}>Stop LIVE</button>:<button className="primary" onClick={start}disabled={busy||!c}>{busy?'Menghubungkan…':'Start LIVE'}</button>}</div>
+          {configError&&<div className="error" role="alert">{configError}<button onClick={retryConfig}>Muat ulang</button></div>}
           {notice&&<div className="notice">{notice}</div>}{s.error&&<div className="error-detail">{s.error}</div>}
         </div>
 
@@ -216,7 +213,7 @@ function Dashboard({logout}){
       </section>
     </section>
     <div className="webhook-shell" hidden={tab!=='webhooks'}>
-      {c?<WebhookSettings initialHooks={c.webhooks} onSave={saveWebhooks}/>:<section className="webhook-load-error panel">
+      {c?<WebhookSettings initialHooks={c.webhooks} onSave={saveWebhooks} signingEnabled={c.webhookSigningEnabled}/>:<section className="webhook-load-error panel">
         <h2>Pengaturan webhook belum tersedia</h2>
         <p>{configError||'Memuat konfigurasi admin…'}</p>
         <button type="button" className="secondary" onClick={retryConfig}>Muat ulang</button>
@@ -227,7 +224,9 @@ function Dashboard({logout}){
 
 function App(){
   const[a,setA]=useState(null);
+  const logout=useCallback(()=>setA(0),[]);
+  useEffect(()=>{window.addEventListener('tlk:unauthorized',logout);return()=>window.removeEventListener('tlk:unauthorized',logout)},[logout]);
   useEffect(()=>{api('/api/auth/me').then(()=>setA(1)).catch(()=>setA(0))},[]);
-  return a===null?<main className="loading">Starting…</main>:a?<Dashboard logout={()=>setA(0)}/>:<Login done={()=>setA(1)}/>;
+  return a===null?<main className="loading">Starting…</main>:a?<Dashboard logout={logout}/>:<Login done={()=>setA(1)}/>;
 }
 createRoot(document.getElementById('root')).render(<App/>);

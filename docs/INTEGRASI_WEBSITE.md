@@ -252,7 +252,33 @@ Konfigurasi webhook disimpan melalui endpoint admin; endpoint `/api/v1/*` **tida
 - Mencoba ulang saat respons gagal, dengan batas timeout/retry yang dapat dikonfigurasi.
 - Membatasi maksimal 20 webhook.
 
-**Penting:** implementasi webhook **belum menyertakan signature HMAC**. Karena itu, URL token acak panjang di path hanyalah perlindungan minimal: validasi token dengan aman di penerima, gunakan HTTPS, rate limiting, autentikasi tambahan sesuai kebutuhan, dan jangan mempercayai `x-tlk-event-id` sebagai tanda bahwa request pasti berasal dari konektor. Untuk saldo/koin atau reward bernilai, tambahkan penandatanganan payload dan verifikasi signature pada kedua sisi **sebelum** mengaktifkan transaksi otomatis.
+**Verifikasi webhook produksi:** isi `WEBHOOK_SIGNING_SECRET` dengan secret acak minimal 32 karakter pada konektor dan penerima. Webhook aktif pada production ditolak jika secret belum dikonfigurasi. Header `x-tlk-timestamp` berisi waktu Unix dalam detik; `x-tlk-signature` berisi `sha256=<hex>`. Signature dihitung dengan HMAC-SHA256 atas **timestamp + titik + body JSON mentah**, sebelum parsing JSON. Jangan menserialisasi ulang body untuk memverifikasi.
+
+Contoh verifikasi Node.js di penerima (pasang sebelum middleware JSON):
+
+```js
+import crypto from 'node:crypto';
+import express from 'express';
+
+app.post('/hooks/tiktok', express.raw({ type: 'application/json', limit: '256kb' }), (req, res) => {
+  const secret = process.env.WEBHOOK_SIGNING_SECRET;
+  if (!secret || !Buffer.isBuffer(req.body)) return res.sendStatus(503);
+  const timestamp = String(req.headers['x-tlk-timestamp'] || '');
+  const signature = String(req.headers['x-tlk-signature'] || '');
+  if (!/^\d{10}$/.test(timestamp) || Math.abs(Date.now() / 1000 - Number(timestamp)) > 300 ||
+      !/^sha256=[a-f0-9]{64}$/.test(signature)) return res.sendStatus(401);
+  const expected = crypto.createHmac('sha256', secret).update(timestamp + '.').update(req.body).digest();
+  const supplied = Buffer.from(signature.slice(7), 'hex');
+  if (!crypto.timingSafeEqual(expected, supplied)) return res.sendStatus(401);
+  let event;
+  try { event = JSON.parse(req.body.toString('utf8')); } catch { return res.sendStatus(400); }
+  // Store event.id with a UNIQUE constraint before applying any reward.
+  // Process valid events idempotently in your own application.
+  res.sendStatus(204);
+});
+```
+
+Header ID/version tetap metadata; bukti autentikasi adalah signature yang terverifikasi. Gunakan HTTPS, secret terpisah dari API/JWT, rate limiting, dan penyimpanan ID event agar replay tidak menggandakan reward. DNS webhook wajib publik dan dipin saat koneksi; URL IP literal, jaringan privat, serta redirect ditolak. Antrean dibatasi empat pengiriman aktif dan 200 menunggu; overflow dicatat dan event pengiriman dilewati. Pengiriman tetap bersifat best-effort, bukan antrean transaksi tahan gangguan.
 
 Semua handler harus **idempotent**: simpan `event.id` yang telah diproses di database consumer, pastikan kombinasi event tidak diproses dua kali, dan jangan gunakan penambahan koin langsung dari perulangan percobaan webhook. Perhatikan bahwa event dalam memori dapat hilang saat restart; pengiriman saat ini bukan *exactly once*.
 

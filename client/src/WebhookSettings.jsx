@@ -7,7 +7,7 @@ import {
 const persisted = source => copyWebhookRows(source);
 const editable = (hooks, prefix = 'loaded') => persisted(hooks).map((hook, i) => ({ ...hook, rowKey: prefix + i }));
 
-export default function WebhookSettings({ initialHooks, onSave }) {
+export default function WebhookSettings({ initialHooks, onSave, signingEnabled = false }) {
   const [saved, setSaved] = useState(() => persisted(initialHooks));
   const [rows, setRows] = useState(() => editable(initialHooks));
   const [customFields, setCustomFields] = useState({});
@@ -86,7 +86,9 @@ export default function WebhookSettings({ initialHooks, onSave }) {
     </div>
 
     <div className="webhook-security-note">
-      <strong>Keamanan:</strong> Endpoint penerima harus memakai HTTPS dan memverifikasi token rahasia sendiri. Webhook belum memakai signature HMAC; jangan gunakan untuk pemberian koin atau reward bernilai tanpa validasi tambahan.
+      <strong>Keamanan:</strong> {signingEnabled
+        ? 'Signature HMAC aktif. Penerima harus memverifikasi signature, timestamp, dan ID event sebelum memproses reward.'
+        : 'Signature HMAC belum aktif. Konfigurasikan secret penandatanganan di server sebelum mengaktifkan webhook produksi.'}
       <a href="https://github.com/harvey-moeid/tiktok-live-konektor/blob/main/docs/INTEGRASI_WEBSITE.md" target="_blank" rel="noopener noreferrer">Panduan integrasi ↗</a>
     </div>
 

@@ -3,6 +3,7 @@ import { broadcast } from './ws.js';
 import { createEvent, safeJsonValue } from './events.js';
 import { normalizeGiftData } from './gifts.js';
 import { EULER_BUSINESS_PLAN_MESSAGE, isEulerBusinessPlanError } from './signing-error.js';
+import { redactText, redactDiagnostic } from './diagnostics.js';
 
 const debugEnabled = /^(1|true|yes|on)$/i.test(String(process.env.TIKTOK_DEBUG || ''));
 const eulerApiKey = String(process.env.EULER_API_KEY || '').trim();
@@ -14,16 +15,15 @@ function requestTimeoutMs() {
 function errorDetails(e) {
   const clean = v => {
     if (v == null) return null;
-    if (typeof v === 'string') return v;
-    try { return JSON.parse(JSON.stringify(v, (k, x) => (k === 'request' || k === 'response' ? undefined : x))); }
-    catch { return String(v); }
+    try { return redactDiagnostic(v); }
+    catch { return '[unavailable]'; }
   };
   const wrapped = e && typeof e === 'object' ? e : {};
   const source = wrapped.exception || wrapped.error || e;
   const info = clean(wrapped.info);
   const message = source?.message || (typeof wrapped.info === 'string' ? wrapped.info : '') || (typeof e === 'string' ? e : '') || 'Unknown TikTok connector error';
   return {
-    message,
+    message: redactText(message),
     name: source?.name || e?.name || 'Error',
     code: source?.code || e?.code || null,
     info,
@@ -133,7 +133,7 @@ export class TikTokService {
     on(ControlEvent.DISCONNECTED, detail => {
       this.running = false;
       if (this.connection === c) this.connection = null;
-      console.warn('[TikTok] Disconnected', JSON.stringify(safeJsonValue(detail)));
+      console.warn('[TikTok] Disconnected', JSON.stringify(redactDiagnostic(detail)));
       this.setStatus('Disconnected');
       this.emitStreamEnded();
     });

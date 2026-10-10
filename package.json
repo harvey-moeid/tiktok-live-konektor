@@ -7,28 +7,32 @@
     "dev": "concurrently \"node --watch server/index.js\" \"vite --host 0.0.0.0 --config client/vite.config.js\"",
     "build": "vite build --config client/vite.config.js",
     "start": "node server/index.js",
-    "check": "node --check server/index.js && node --check server/config.js && node --check server/auth.js && node --check server/api-auth.js && node --check server/tiktok.js && node --check server/managed-live.js && node --check server/gifts.js && node --check server/webhooks.js && node --check server/ws.js && node --check server/events.js && node --check server/history.js",
-    "test": "node --test tests/*.test.js && npm run check"
+    "check": "node --check server/index.js && node --check server/config.js && node --check server/auth.js && node --check server/security.js && node --check server/api-auth.js && node --check server/tiktok.js && node --check server/managed-live.js && node --check server/gifts.js && node --check server/webhooks.js && node --check server/webhook-delivery.js && node --check server/work-queue.js && node --check server/ws.js && node --check server/events.js && node --check server/history.js && node --check server/python-fallback.js && node --check server/diagnostics.js",
+    "test": "node --test tests/*.test.js && npm run check",
+    "test:browser": "node scripts/browser-smoke.mjs"
   },
   "dependencies": {
+    "@eulerstream/euler-websocket-sdk": "^1.0.0",
     "@vitejs/plugin-react": "^5.0.4",
     "bcryptjs": "^3.0.2",
     "cookie-parser": "^1.4.7",
     "express": "^5.1.0",
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
+    "ipaddr.js": "^2.5.0",
     "jsonwebtoken": "^9.0.3",
+    "proxy-addr": "^2.0.8",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
-    "@eulerstream/euler-websocket-sdk": "^1.0.0",
     "tiktok-live-connector": "^2.5.0",
     "vite": "^7.3.5",
     "ws": "^8.21.1"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "playwright-core": "^1.64.0"
   },
   "engines": {
     "node": ">=24 <25"

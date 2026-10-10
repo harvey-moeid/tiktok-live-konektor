@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
 const reportPath = process.argv[2] || 'audit.json';
-const allowedAdvisories = new Set(['GHSA-CH52-4W7C-C8XP']);
+const allowedAdvisories = new Set();
 let report;
 try {
   report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));

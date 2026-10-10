@@ -7,14 +7,14 @@ Realtime TikTok LIVE bridge: Express + React/Vite + Socket.IO + external WebSock
 Development:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
 Production build:
 
 ```bash
-NODE_ENV=production npm install --include=dev
+NODE_ENV=production npm ci --include=dev
 npm run build
 npm start
 ```
@@ -25,10 +25,10 @@ Health check: `GET /api/health`
 
 ## Required production environment
 
-- `JWT_SECRET`: random secret, minimum 32 characters.
+- `JWT_SECRET`: random secret, minimum 32 characters; placeholder values are rejected.
 - `ADMIN_USERNAME`: dashboard username.
-- `ADMIN_PASSWORD`: dashboard password used on first startup when no stored password hash exists.
-- `WS_TOKEN`: long random token for the external WebSocket.
+- `ADMIN_PASSWORD`: first-startup dashboard password, minimum 12 characters and maximum 72 UTF-8 bytes; placeholder values are rejected.
+- `WS_TOKEN`: independent random token, minimum 32 characters, for the external WebSocket.
 - `TIKTOK_USERNAME`: default TikTok username.
 - `EULER_API_KEY`: server-side Eulerstream API key. A Community key does NOT authorize Business signing, but can be used for the separate managed Cloud WebSocket fallback implemented here. Actual access and quotas depend on your Eulerstream account.
 
@@ -46,7 +46,7 @@ For a complete Indonesian guide to connecting additional websites using REST API
 
 After logging in as admin, open **Integrasi Webhook** from the dashboard navigation. Add up to 20 HTTPS destinations, enable/disable each target, select event types (empty selection = all events), include optional custom event names, remove destinations, and click **Simpan webhook**. Edits are local drafts until saved; **Batalkan** reverts them. This UI uses the admin-cookie-protected `PUT /api/webhooks` endpoint which changes only `webhooks`, so unsaved LIVE username/Room ID edits will not be overwritten.
 
-The webhook sender currently does **not** sign payloads with HMAC. Use a securely protected receiver and verify each delivery independently. See [docs/INTEGRASI_WEBSITE.md](docs/INTEGRASI_WEBSITE.md) for the full guidance.
+Production webhook delivery requires `WEBHOOK_SIGNING_SECRET` (32+ characters) and includes HMAC-SHA256 over `timestamp.rawBody`. The receiver must verify the signature, check timestamp freshness, and deduplicate event IDs. See [docs/INTEGRASI_WEBSITE.md](docs/INTEGRASI_WEBSITE.md) for the full guidance.
 
 ## Menghapus riwayat Aktivitas LIVE (admin)
 
@@ -63,7 +63,7 @@ The service exposes a read-only API for other websites/applications. Dashboard a
 
 Set these production variables:
 
-- `API_KEY`: a dedicated random API key. Keep it separate from `JWT_SECRET` and `WS_TOKEN`.
+- `API_KEY`: a dedicated random API key, minimum 32 characters. Keep it separate from `JWT_SECRET` and `WS_TOKEN`.
 - `API_ALLOWED_ORIGINS`: comma-separated browser origins allowed to call the REST API or open the realtime WebSocket, for example `https://app.example.com,https://www.example.com`.
 
 Server-to-server requests do not send a browser `Origin` header, so they can use the API key without `API_ALLOWED_ORIGINS`.
@@ -247,7 +247,7 @@ When TikTok supplies a gift ID but no name, the connector reports \`Gift #5953\`
 
 ## CI and security
 
-`CI` tests Node 20, 22, and 24, builds the Vite client, and separately reproduces a Render-style build with `NODE_ENV=production`. `Security` runs on pushes, pull requests, manual dispatch, and a weekly schedule. High/critical runtime advisories fail the security job unless they match the single explicitly approved advisory chain in `scripts/security-audit.mjs`.
+`CI` tests Node 24, builds the Vite client, and separately reproduces a Render-style build with `NODE_ENV=production`. `Security` runs on pushes, pull requests, manual dispatch, and a weekly schedule. High/critical runtime advisories fail the security job.
 
 ## Python LIVE fallback (optional)
 
@@ -257,11 +257,11 @@ This is **an alternative engine, not an unconditional bypass for TikTok restrict
 
 ### Deployment on Render
 
-1. Sync the updated `render.yaml` Blueprint: it defines two web services in the same repository, `tiktok-live-konektor` (Node) and `tiktok-live-python` (Python). Both are set to free as a development default.
-2. The Blueprint generates the secret `PYTHON_BRIDGE_TOKEN` on the Python service and references it in the Node service as `PYTHON_FALLBACK_TOKEN`. It also resolves Python's `RENDER_EXTERNAL_HOSTNAME` into `PYTHON_FALLBACK_HOSTNAME` on Node. **Do not publish tokens.**
-3. Render free web services **cannot receive private-network connections**. Node therefore calls Python over `https://<python hostname>` with bearer authentication. A free service may spin down and require extra time to start; for always-on production, consider paid instances.
+1. Deploy `render.yaml` for the primary Node service. It uses a paid Starter instance and persistent configuration disk. Deploy the separate optional `render-python.yaml` Blueprint only if Python fallback is needed; it also uses a paid Starter instance.
+2. The Python Blueprint generates `PYTHON_BRIDGE_TOKEN`. Set Node's `PYTHON_FALLBACK_TOKEN` to the same value securely in Render settings, and `PYTHON_FALLBACK_URL` to Python's public HTTPS origin. These separate Blueprints do not wire the services automatically. **Do not publish tokens.**
+3. Node calls the optional Python bridge over `https://<python hostname>` with bearer authentication. A free service may spin down and require extra time to start; for always-on production, consider paid instances.
 4. If provisioning services manually, deploy Python with:
-   - Runtime Python 3.12; build `pip install -r python_fallback/requirements.txt`
+   - Runtime Python 3.12; build `pip install -r python_fallback/requirements.lock`
    - Start `uvicorn python_fallback.app:app --host 0.0.0.0 --port $PORT`
    - `PYTHON_BRIDGE_TOKEN` set to a random secret of at least 32 characters
    - Set on Node: `PYTHON_FALLBACK_URL=https://<python-service>.onrender.com` and `PYTHON_FALLBACK_TOKEN` to **the same** token
@@ -275,3 +275,9 @@ Fallback is disabled unless the URL/hostname **and** token are configured. No Py
 - If Python disconnects, the bridge reports the disconnected state instead of falsely continuing to show LIVE.
 - Both free services can sleep, and a public HTTPS request to a sleeping Python instance may exceed the initial connection timeout. Retrying **Start LIVE** is safe.
 - Python fallback is only a secondary source; it does not cure TikTok anti-bot blocks, expired sessions, offline channels, or upstream signing outages.
+
+## Production deployment and audit
+
+See [production audit and deployment checks](docs/PRODUCTION_AUDIT.md). Run a single Node instance: LIVE state, session socket tracking, rate limits and event history are process-local. Keep `CONFIG_FILE` on durable storage for password changes, logout revocations and webhook settings. `TRUST_PROXY=1` assumes one trusted reverse proxy that overwrites forwarding headers; use `0` when serving directly. Production requires HTTPS.
+
+Dashboard requests and Socket.IO handshakes must come from the same origin. Logout revokes the current session; password changes revoke all sessions. JWT expiration is rechecked on Socket.IO connections every 30 seconds. Config writes are atomic and errors are reported. Webhooks require public HTTPS DNS names; private, local and IP-literal targets are rejected, DNS answers are validated and pinned for each connection, redirects are rejected. Delivery is bounded to four concurrent jobs and 200 waiting jobs; overflow is logged and dropped.

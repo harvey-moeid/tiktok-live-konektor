@@ -1,0 +1,15 @@
+# Optional separate Blueprint. Configure its public HTTPS URL and matching token
+# as PYTHON_FALLBACK_URL / PYTHON_FALLBACK_TOKEN on the Node service.
+services:
+  - type: web
+    name: tiktok-live-python
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r python_fallback/requirements.lock
+    startCommand: uvicorn python_fallback.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.14
+      - key: PYTHON_BRIDGE_TOKEN
+        generateValue: true

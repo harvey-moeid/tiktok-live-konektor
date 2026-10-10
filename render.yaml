@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: tiktok-live-konektor
+    runtime: node
+    plan: starter
+    buildCommand: npm ci --include=dev --no-audit --no-fund && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    disk:
+      name: tiktok-live-config
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: 24
+      - key: TRUST_PROXY
+        value: "1"
+      - key: CONFIG_FILE
+        value: /var/data/config.json
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
+      - key: WS_TOKEN
+        generateValue: true
+      - key: API_KEY
+        generateValue: true
+      - key: WEBHOOK_SIGNING_SECRET
+        generateValue: true
+      - key: TIKTOK_USERNAME
+        sync: false
+      - key: EULER_API_KEY
+        sync: false

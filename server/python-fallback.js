@@ -35,6 +35,7 @@ export class PythonLiveFallback {
     if (!this.enabled) throw Error('Python fallback belum dikonfigurasi.');
     const response = await this.fetchImpl(this.config.endpoint + path, {
       method,
+      redirect: 'error',
       headers: {
         Authorization: 'Bearer ' + this.config.token,
         ...(body ? { 'Content-Type': 'application/json' } : {})

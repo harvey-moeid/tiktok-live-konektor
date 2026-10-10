@@ -1,4 +1,5 @@
 // Shared, side-effect-free draft helpers for the admin webhook editor.
+import { publicWebhookUrl } from './webhook-url.js';
 export const MAX_WEBHOOKS = 20;
 export const WEBHOOK_EVENT_OPTIONS = [
   ['chat', 'Komentar'],
@@ -47,13 +48,7 @@ export function validateWebhookRows(rows) {
     const value = String(row?.url || '').trim();
     if (!value || value.length > 2048) return 'Webhook #' + number + ': URL wajib diisi dan maksimal 2048 karakter.';
     let url;
-    try { url = new URL(value); } catch { return 'Webhook #' + number + ': format URL tidak valid.'; }
-    const hostname = url.hostname.toLowerCase();
-    if (url.protocol !== 'https:' || url.username || url.password ||
-      ['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(hostname) ||
-      hostname.endsWith('.localhost')) {
-      return 'Webhook #' + number + ': gunakan HTTPS publik tanpa username/password.';
-    }
+    try { url = publicWebhookUrl(value); } catch { return 'Webhook #' + number + ': gunakan HTTPS publik tanpa username/password atau alamat IP.'; }
     if (seen.has(url.toString())) return 'URL webhook duplikat: hapus salah satu agar event tidak terkirim dua kali.';
     seen.add(url.toString());
     if (!Array.isArray(row.events) || row.events.length > 50 ||

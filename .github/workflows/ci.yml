@@ -17,16 +17,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20.x, 22.x, 24.x]
+        node: [24.x]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --include=dev --no-audit --no-fund
       - run: npm test
       - run: npm run build
       - run: test -s client/dist/index.html
+      - run: npm run test:browser
       - if: matrix.node == '24.x'
         uses: actions/upload-artifact@v4
         with:
@@ -45,7 +46,7 @@ jobs:
         with:
           node-version: 24.x
       - name: Install exactly like Render dashboard
-        run: npm install --no-audit --no-fund
+        run: npm ci --include=dev --no-audit --no-fund
       - name: Build client with production environment
         run: npm run build
       - name: Verify built entrypoint
@@ -59,6 +60,6 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - run: pip install -r python_fallback/requirements.txt
+      - run: pip install -r python_fallback/requirements.lock
       - run: python -m unittest discover -s python_fallback -p 'test_*.py'
       - run: PYTHON_BRIDGE_TOKEN=temporary-test-token-at-least-32-characters python -c "from python_fallback.app import app; assert app"

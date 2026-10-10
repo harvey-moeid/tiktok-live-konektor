@@ -28,3 +28,7 @@ test('normalizeWebhooks preserves unrelated event filters and disabled state', (
 test('normalizeWebhooks permits zero destinations to disable delivery', () => {
   assert.deepEqual(normalizeWebhooks([]), []);
 });
+
+test('normalizeWebhooks rejects duplicate URLs to prevent duplicate delivery', () => {
+  assert.throws(() => normalizeWebhooks([{ url: 'https://example.com' }, { url: 'https://example.com/' }]), /duplikat/);
+});

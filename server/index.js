@@ -7,9 +7,9 @@ import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { Server as SocketIO } from 'socket.io';
 import { getConfig, getSafeConfig, updateConfig } from './config.js';
-import { login, verify, setPassword } from './auth.js';
+import { login, verify, setPassword, revokeSession } from './auth.js';
 import { dispatchWebhook, normalizeWebhooks } from './webhooks.js';
-import { attachExternalWs } from './ws.js';
+import { attachExternalWs, closeExternalWs } from './ws.js';
 import { TikTokService } from './tiktok.js';
 import { ManagedLiveConnection } from './managed-live.js';
 import { isEulerBusinessPlanError } from './signing-error.js';
@@ -18,24 +18,39 @@ import { removeHistoryEvent } from './history.js';
 import { broadcast } from './ws.js';
 import { PythonLiveFallback } from './python-fallback.js';
 import { apiAuth, externalCors, isAllowedWsOrigin } from './api-auth.js';
+import { sameOrigin, protectAdminOrigin, trustProxy } from './security.js';
+import { redactText } from './diagnostics.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+if (process.env.NODE_ENV === 'production') normalizeWebhooks(getConfig().webhooks);
 const dist = path.join(root, 'client', 'dist');
 const app = express();
-app.set('trust proxy', 1);
+app.set('trust proxy', trustProxy());
 const server = http.createServer(app);
-const io = new SocketIO(server, { path: '/socket.io', maxHttpBufferSize: 256 * 1024 });
+const io = new SocketIO(server, {
+  path: '/socket.io', maxHttpBufferSize: 256 * 1024,
+  allowRequest: (req, done) => done(null, sameOrigin(req))
+});
+function disconnectSessions(predicate) {
+  for (const socket of io.sockets.sockets.values()) {
+    if (predicate(socket.data.claims)) socket.disconnect(true);
+  }
+}
 
 app.use(helmet({ crossOriginEmbedderPolicy: false }));
 app.use(express.json({ limit: '64kb' }));
 app.use(cookieParser());
+app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+for (const route of ['/api/auth', '/api/config', '/api/webhooks', '/api/events', '/api/live', '/api/state']) {
+  app.use(route, protectAdminOrigin);
+}
 app.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true, legacyHeaders: false }));
 const loginLimiter = rateLimit({
   windowMs: 15 * 60_000,
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  skipSuccessfulRequests: true,
+  skipSuccessfulRequests: false,
   message: { error: 'Terlalu banyak percobaan login. Coba lagi beberapa saat.' }
 });
 
@@ -69,7 +84,7 @@ function safe() {
 }
 function setStatus(status, error = null) {
   state.status = status;
-  state.error = error;
+  state.error = error ? redactText(error) : null;
   io.emit('status', safe());
 }
 function resetStats() {
@@ -215,6 +230,8 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
   res.json({ ok: true });
 });
 app.post('/api/auth/logout', auth, (_, res) => {
+  revokeSession(_.user);
+  disconnectSessions(claims => claims?.jti === _.user.jti);
   res.clearCookie('tlk_session', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/' });
   res.json({ ok: true });
 });
@@ -242,13 +259,14 @@ app.delete('/api/events', auth, (_, res) => {
 // when destinations are edited independently in the dashboard.
 app.put('/api/webhooks', auth, (req, res) => {
   if (!Array.isArray(req.body?.webhooks)) return res.status(400).json({ error: 'Daftar webhook harus berupa array.' });
+  let webhooks;
   try {
-    const webhooks = normalizeWebhooks(req.body.webhooks);
-    updateConfig({ webhooks });
-    return res.json({ ok: true, webhooks });
+    webhooks = normalizeWebhooks(req.body.webhooks);
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
+  updateConfig({ webhooks });
+  return res.json({ ok: true, webhooks });
 });
 app.put('/api/config', auth, (req, res) => {
   const body = req.body || {};
@@ -265,7 +283,12 @@ app.put('/api/config', auth, (req, res) => {
   return res.json(getSafeConfig());
 });
 app.post('/api/auth/password', auth, async (req, res) => {
-  try { await setPassword(String(req.body?.password || '')); res.json({ ok: true }); }
+  try {
+    await setPassword(String(req.body?.password || ''));
+    disconnectSessions(() => true);
+    res.clearCookie('tlk_session', { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: '/' });
+    res.json({ ok: true });
+  }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/live/start', auth, async (req, res) => {
@@ -342,7 +365,7 @@ app.post('/api/live/start', auth, async (req, res) => {
   });
   operation = run.catch(() => undefined);
   try { res.json(await run); }
-  catch (e) { res.status(502).json({ error: e.message, details: e?.errors || e?.cause || null }); }
+  catch (e) { res.status(502).json({ error: redactText(e.message || 'LIVE connection failed').slice(0, 750) }); }
 });
 app.post('/api/live/stop', auth, async (_, res) => {
   const run = operation.then(async () => {
@@ -373,7 +396,8 @@ app.post('/api/live/stop', auth, async (_, res) => {
 io.use((socket, next) => {
   try {
     const cookie = String(socket.handshake.headers.cookie || '').match(/(?:^|;\s*)tlk_session=([^;]+)/)?.[1];
-    verify(cookie);
+    socket.data.token = cookie;
+    socket.data.claims = verify(cookie);
     next();
   } catch { next(Error('Unauthorized')); }
 });
@@ -381,25 +405,40 @@ io.on('connection', socket => {
   socket.emit('state', safe());
   socket.emit('history', state.events);
 });
+const sessionCheck = setInterval(() => {
+  for (const socket of io.sockets.sockets.values()) {
+    try { verify(socket.data.token); } catch { socket.disconnect(true); }
+  }
+}, 30_000);
+sessionCheck.unref();
 
 app.use('/api', (_, res) => res.status(404).json({ error: 'API endpoint tidak ditemukan.' }));
-app.use(express.static(dist));
+app.use('/assets', express.static(path.join(dist, 'assets'), { immutable: true, maxAge: '1y' }));
+app.use(express.static(dist, { maxAge: 0 }));
 app.get(/.*/, (req, res) => res.sendFile(path.join(dist, 'index.html')));
+app.use((error, _req, res, _next) => {
+  const status = error.status === 400 ? 400 : error.status === 413 ? 413 : 500;
+  console.warn('[http]', status, error.code || error.type || 'request failed');
+  res.status(status).json({ error: status === 413 ? 'Payload terlalu besar.' : status === 400 ? 'JSON tidak valid.' : 'Permintaan gagal diproses.' });
+});
 
 const port = Number(process.env.PORT || 10000);
-server.listen(port, '0.0.0.0', () => console.log(`TikTok Live Konektor listening on ${port}`));
+server.listen(port, '0.0.0.0', () => console.log(`TikTok Live Konektor listening on ${server.address().port}`));
 
 let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal}`);
+  const timer = setTimeout(() => process.exit(1), 10_000);
+  timer.unref();
+  clearInterval(sessionCheck);
+  closeExternalWs();
+  io.disconnectSockets(true);
   try { await managed.stop(); } catch (e) { console.warn('[shutdown] Managed disconnect failed:', e?.message || String(e)); }
   try { await python.stop(); } catch (e) { console.warn('[shutdown] Python disconnect failed:', e?.message || String(e)); }
   try { await tiktok.stop(); } catch (e) { console.warn('[shutdown] TikTok disconnect failed:', e?.message || String(e)); }
   server.close(() => process.exit(0));
-  const timer = setTimeout(() => process.exit(1), 10_000);
-  timer.unref?.();
 }
 process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 process.once('SIGINT', () => { void shutdown('SIGINT'); });

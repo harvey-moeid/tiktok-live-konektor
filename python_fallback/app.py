@@ -21,7 +21,16 @@ TOKEN = os.environ.get("PYTHON_BRIDGE_TOKEN", "")
 if len(TOKEN) < 32:
     raise RuntimeError("PYTHON_BRIDGE_TOKEN must be configured with at least 32 characters")
 
-app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+@contextlib.asynccontextmanager
+async def lifespan(_app):
+    try:
+        yield
+    finally:
+        async with bridge.lock:
+            await bridge.stop()
+
+
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
 USER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
@@ -140,6 +149,10 @@ class Bridge:
             except (Exception, asyncio.TimeoutError) as exc:
                 message = str(exc) or "Python TikTok connection timed out"
                 await self.stop()
+                if ready.done() and not ready.cancelled():
+                    ready.exception()
+                else:
+                    ready.cancel()
                 raise HTTPException(status_code=502, detail=message[:500]) from exc
             return {"ok": True, "status": "connected", "roomId": self.room_id, "cursor": 0}
 

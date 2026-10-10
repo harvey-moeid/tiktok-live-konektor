@@ -6,3 +6,6 @@ client/dist/
 data/*.json
 npm-debug.log*
 .DS_Store
+__pycache__/
+*.pyc
+audit.json
