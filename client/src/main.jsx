@@ -124,10 +124,13 @@ function Dashboard({logout}){
   async function clearActivities(){
     if(historyBusy||!events.length)return;
     if(!window.confirm('Hapus SEMUA '+events.length+' aktivitas dari riwayat? Tindakan ini tidak dapat dibatalkan. Statistik LIVE dan webhook yang sudah terkirim tidak berubah.'))return;
+    // Remember which rows existed before the request: never remove fresh LIVE events
+    // that arrive after the server has cleared history but before HTTP resolves.
+    const idsBefore=new Set(events.map(x=>x.id));
     setHistoryBusy('all');setHistoryFeedback(null);
     try{
       const result=await api('/api/events',{method:'DELETE'});
-      setEvents([]);
+      setEvents(v=>v.filter(x=>!idsBefore.has(x.id)));
       setHistoryFeedback({kind:'success',message:result.removed+' aktivitas berhasil dihapus.'});
     }catch(e){setHistoryFeedback({kind:'error',message:e.message})}
     finally{setHistoryBusy('')}
