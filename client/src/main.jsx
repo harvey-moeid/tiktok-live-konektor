@@ -59,7 +59,7 @@ function eventBody(x){
     default:return '';
   }
 }
-function EventCard({item}){
+function EventCard({item,onDelete,historyBusy}){
   const actor=actorOf(item), body=eventBody(item), isSystem=['viewer','stream'].includes(item.event);
   return <article className={'event event-'+item.event}>
     <div className="event-icon" aria-hidden="true">{icons[item.event]||'•'}</div>
@@ -69,7 +69,12 @@ function EventCard({item}){
           <strong>{isSystem?labels[item.event]:actor.name}</strong>
           {!isSystem&&actor.handle&&<span>{actor.handle}</span>}
         </div>
-        <time>{new Date(item.timestamp).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</time>
+        <div className="event-meta">
+          <time>{new Date(item.timestamp).toLocaleTimeString('id-ID',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</time>
+          <button type="button" className="event-delete" onClick={()=>onDelete(item)}
+            disabled={!!historyBusy||!item.id} aria-label={'Hapus aktivitas '+(labels[item.event]||item.event)}
+            title="Hapus aktivitas">{historyBusy===item.id?'Menghapus…':'🗑 Hapus'}</button>
+        </div>
       </div>
       <div className={'event-copy '+(item.event==='chat'?'comment':'')}>{body}</div>
       {item.event!=='chat'&&<span className="event-label">{labels[item.event]||item.event}</span>}
@@ -84,6 +89,7 @@ function Stat({label,value,sub}){
 function Dashboard({logout}){
   const[s,setS]=useState(),[c,setC]=useState(),[events,setEvents]=useState([]),[f,setF]=useState('all'),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
   const[tab,setTab]=useState('live'),[configError,setConfigError]=useState('');
+  const[historyBusy,setHistoryBusy]=useState(''),[historyFeedback,setHistoryFeedback]=useState(null);
   useEffect(()=>{
     let mounted=true;
     api('/api/state').then(x=>mounted&&setS(x)).catch(logout);
@@ -94,6 +100,8 @@ function Dashboard({logout}){
     socket.on('event',x=>setEvents(v=>v.concat(x).slice(-500)));
     socket.on('stats',stats=>setS(v=>v?{...v,stats}:v));
     socket.on('history',x=>setEvents(Array.isArray(x)?x:[]));
+    socket.on('history:removed',x=>setEvents(v=>v.filter(item=>item.id!==x?.id)));
+    socket.on('history:cleared',()=>setEvents([]));
     socket.on('connect_error',()=>setNotice('Koneksi realtime terputus. Menghubungkan kembali…'));
     socket.on('connect',()=>setNotice(''));
     return()=>{mounted=false;socket.close()};
@@ -101,6 +109,32 @@ function Dashboard({logout}){
 
   const list=useMemo(()=>events.filter(x=>visibleTypes.has(x.event)&&(f==='all'||x.event===f)).slice().reverse(),[events,f]);
   if(!s)return <main className="loading">Loading…</main>;
+
+  async function removeActivity(item){
+    if(historyBusy||!item?.id)return;
+    if(!window.confirm('Hapus aktivitas ini dari riwayat? Statistik LIVE dan webhook yang sudah terkirim tidak berubah.'))return;
+    setHistoryBusy(item.id);setHistoryFeedback(null);
+    try{
+      await api('/api/events/'+encodeURIComponent(item.id),{method:'DELETE'});
+      setEvents(v=>v.filter(x=>x.id!==item.id));
+      setHistoryFeedback({kind:'success',message:'Aktivitas berhasil dihapus.'});
+    }catch(e){setHistoryFeedback({kind:'error',message:e.message})}
+    finally{setHistoryBusy('')}
+  }
+  async function clearActivities(){
+    if(historyBusy||!events.length)return;
+    if(!window.confirm('Hapus SEMUA '+events.length+' aktivitas dari riwayat? Tindakan ini tidak dapat dibatalkan. Statistik LIVE dan webhook yang sudah terkirim tidak berubah.'))return;
+    // Remember which rows existed before the request: never remove fresh LIVE events
+    // that arrive after the server has cleared history but before HTTP resolves.
+    const idsBefore=new Set(events.map(x=>x.id));
+    setHistoryBusy('all');setHistoryFeedback(null);
+    try{
+      const result=await api('/api/events',{method:'DELETE'});
+      setEvents(v=>v.filter(x=>!idsBefore.has(x.id)));
+      setHistoryFeedback({kind:'success',message:result.removed+' aktivitas berhasil dihapus.'});
+    }catch(e){setHistoryFeedback({kind:'error',message:e.message})}
+    finally{setHistoryBusy('')}
+  }
 
   async function start(){
     setBusy(true);setNotice('');
@@ -171,9 +205,14 @@ function Dashboard({logout}){
       </aside>
 
       <section className="panel feed">
-        <div className="feed-head"><div><h2>Aktivitas LIVE</h2><p>Event terbaru tampil paling atas.</p></div><span>{list.length} event</span></div>
+        <div className="feed-head">
+          <div><h2>Aktivitas LIVE</h2><p>Event terbaru tampil paling atas.</p></div>
+          <div className="feed-actions"><span>{list.length} event</span><button type="button" className="danger clear-history"
+            onClick={clearActivities} disabled={!!historyBusy||!events.length}>{historyBusy==='all'?'Menghapus…':'🗑 Hapus Semua'}</button></div>
+        </div>
         <nav>{filters.map(([key,label])=><button className={f===key?'active':''}onClick={()=>setF(key)}key={key}>{label}</button>)}</nav>
-        <div className="event-list">{list.length?list.map(x=><EventCard item={x} key={x.id||x.timestamp}/>):<div className="empty"><div>◌</div><strong>Belum ada aktivitas</strong><span>Komentar, like, gift, dan event LIVE akan muncul di sini.</span></div>}</div>
+        {historyFeedback&&<div role="status" className={'history-feedback '+historyFeedback.kind}>{historyFeedback.message}</div>}
+        <div className="event-list">{list.length?list.map(x=><EventCard item={x} key={x.id||x.timestamp} onDelete={removeActivity} historyBusy={historyBusy}/>):<div className="empty"><div>◌</div><strong>Belum ada aktivitas</strong><span>Komentar, like, gift, dan event LIVE akan muncul di sini.</span></div>}</div>
       </section>
     </section>
     <div className="webhook-shell" hidden={tab!=='webhooks'}>
