@@ -14,6 +14,7 @@ import { TikTokService } from './tiktok.js';
 import { ManagedLiveConnection } from './managed-live.js';
 import { isEulerBusinessPlanError } from './signing-error.js';
 import { normalizeEvent, createEvent } from './events.js';
+import { removeHistoryEvent } from './history.js';
 import { broadcast } from './ws.js';
 import { PythonLiveFallback } from './python-fallback.js';
 import { apiAuth, externalCors, isAllowedWsOrigin } from './api-auth.js';
@@ -220,6 +221,23 @@ app.post('/api/auth/logout', auth, (_, res) => {
 app.get('/api/auth/me', auth, (_, res) => res.json({ ok: true }));
 app.get('/api/state', auth, (_, res) => res.json(safe()));
 app.get('/api/config', auth, (_, res) => res.json(getSafeConfig()));
+
+// History is a volatile dashboard feed. Never undo counters or re-send webhooks.
+app.delete('/api/events/:id', auth, (req, res) => {
+  const result = removeHistoryEvent(state.events, req.params.id);
+  if (result.status === 'invalid') return res.status(400).json({ error: 'ID aktivitas tidak valid.' });
+  if (result.status === 'missing') return res.status(404).json({ error: 'Aktivitas tidak ditemukan atau sudah dihapus.' });
+  state.events = result.events;
+  io.emit('history:removed', { id: req.params.id });
+  return res.json({ ok: true, id: req.params.id });
+});
+
+app.delete('/api/events', auth, (_, res) => {
+  const removed = state.events.length;
+  state.events = [];
+  io.emit('history:cleared');
+  return res.json({ ok: true, removed });
+});
 // Webhook-specific admin endpoint avoids overwriting LIVE username/room settings
 // when destinations are edited independently in the dashboard.
 app.put('/api/webhooks', auth, (req, res) => {

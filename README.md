@@ -48,6 +48,15 @@ After logging in as admin, open **Integrasi Webhook** from the dashboard navigat
 
 The webhook sender currently does **not** sign payloads with HMAC. Use a securely protected receiver and verify each delivery independently. See [docs/INTEGRASI_WEBSITE.md](docs/INTEGRASI_WEBSITE.md) for the full guidance.
 
+## Menghapus riwayat Aktivitas LIVE (admin)
+
+Pada tab **Aktivitas LIVE**, gunakan tombol **🗑 Hapus** untuk satu event atau **🗑 Hapus Semua** untuk seluruh riwayat, termasuk event yang saat ini tersembunyi oleh filter. Browser meminta konfirmasi sebelum melakukan penghapusan. Semua perubahan tersinkron ke dashboard admin lain melalui Socket.IO, termasuk setelah reconnect.
+
+- `DELETE /api/events/:id` — hapus satu aktivitas berdasarkan ID. Respons 400 bila ID tidak valid dan 404 bila sudah tidak ada.
+- `DELETE /api/events` — hapus seluruh riwayat; respons berisi jumlah event yang dihapus.
+- Kedua endpoint membutuhkan sesi login admin (`tlk_session`). API publik `/api/v1` tetap **read-only**.
+- Penghapusan hanya memengaruhi feed yang disimpan sementara **di memori server**; tidak mengubah statistik LIVE, koneksi, penghitung gift, atau pengiriman webhook yang sudah terjadi. Event LIVE baru akan tetap masuk seperti biasa. Tidak ada penyimpanan riwayat permanen: restart proses server juga mengosongkan feed.
+
 ## External API v1
 
 The service exposes a read-only API for other websites/applications. Dashboard authentication remains separate and LIVE start/stop/configuration are not exposed through this API.

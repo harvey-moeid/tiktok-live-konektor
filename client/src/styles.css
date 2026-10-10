@@ -88,3 +88,24 @@ button{border:1px solid var(--line);border-radius:11px;padding:10px 13px;backgro
  .webhook-save-actions{justify-content:flex-end}
  .webhook-save-actions button{flex:1}
 }
+
+/* Admin history controls: touch-friendly, responsive, and separate from LIVE stats. */
+.feed-actions{display:flex;align-items:center;gap:11px;flex-wrap:wrap;justify-content:flex-end}
+.feed-actions>span{color:var(--muted);font-size:12px;white-space:nowrap}
+.clear-history{font-size:12px;padding:8px 11px;white-space:nowrap}
+.event-meta{display:flex;gap:8px;align-items:center;flex:0 0 auto}
+.event-delete{color:#fda4af;border:1px solid #50303c;background:#24131a;font-size:11px;padding:6px 8px;white-space:nowrap}
+.event-delete:hover:not(:disabled),.clear-history:hover:not(:disabled){border-color:#fb7185}
+.history-feedback{margin:0 18px 10px;padding:9px 12px;border-radius:10px;font-size:12px;overflow-wrap:anywhere}
+.history-feedback.success{background:#103026;border:1px solid #1b604a;color:#a7f3d0}
+.history-feedback.error{background:#331821;border:1px solid #7f2436;color:#fecdd3}
+@media(max-width:560px){
+  .feed-head{align-items:center;gap:7px}
+  .feed-actions{gap:6px}
+  .clear-history{padding:8px;font-size:11px}
+  .event-top{gap:5px}
+  .event-meta{flex-direction:column;align-items:flex-end;gap:5px}
+  .event-delete{padding:6px 7px;font-size:10px}
+  .event-identity{flex-wrap:wrap;gap:3px}
+  .history-feedback{margin:0 12px 9px}
+}
