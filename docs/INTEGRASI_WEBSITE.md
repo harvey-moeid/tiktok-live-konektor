@@ -1,268 +1,264 @@
-# Integrasi website lain dengan TikTok LIVE Konektor
+# Integrasi website lain ke TikTok Live Konektor
 
-Panduan ini menjadikan **`tiktok-live-konektor` sebagai satu sumber data TikTok LIVE** untuk beberapa website (misalnya dashboard, overlay, game, dan sistem interaksi). Website konsumen tidak perlu menjalankan konektor TikTok masing-masing.
+Panduan ini menghubungkan backend website Anda ke layanan `tiktok-live-konektor`. Ganti semua domain contoh dengan URL deployment Anda. Contoh URL `https://tiktok-live-konektor.onrender.com` bukan bukti bahwa deployment itu tersedia atau broadcaster sedang LIVE.
 
-> **Status fitur:** REST API v1, external WebSocket, dan webhook tersedia pada server Node. Fallback Python bersifat opsional, bergantung pada konfigurasi serta deployment layanan Python terpisah. Node dan Python tetap mengirimkan format event yang sama. Dokumentasi ini tidak membuktikan bahwa koneksi `@jalurtarot` sedang LIVE di produksi.
+## 1. Pilih jalur integrasi
 
-## 1. Gambaran sistem
-
-```text
-TikTok LIVE @jalurtarot
-         |
- Node.js connector ──(jika gagal saat Start LIVE)──> Python TikTokLive
-         |                                         |
-         +----------------- event normalized ------+
-                              |
-                    tiktok-live-konektor
-                              |
-               REST API v1 / WebSocket / webhook
-                     |       |        |
-                Website A  Website B  Website C
+```mermaid
+flowchart LR
+  T[TikTok LIVE] --> K[Konektor Node / managed / Python]
+  K -->|REST atau WebSocket| B[Backend website]
+  K -->|Webhook HTTPS dengan HMAC| B
+  B -->|Data yang diizinkan| F[Frontend website]
 ```
 
-- Jalankan **Start LIVE** dari dashboard admin konektor saat akun benar-benar sedang LIVE. `/api/v1/*` **read-only**, bukan endpoint untuk memulai/menghentikan LIVE.
-- Cukup satu proses koneksi TikTok di pusat. Banyak website boleh memakai API yang sama; pertimbangkan pembatasan akses tiap consumer.
-- Base URL contoh (ganti apabila domain produksi berubah):
+| Kebutuhan | Pilihan |
+| --- | --- |
+| Status, jumlah viewer, like dan gift | REST dari backend/proxy website |
+| Overlay/chat/game realtime | Satu `/live` WebSocket di backend, lalu relay ke frontend |
+| Memicu workflow server | Webhook HTTPS dengan verifikasi HMAC dan idempotency |
+| Mulai/berhenti LIVE dan konfigurasi | Dashboard admin konektor |
 
-  ```text
-  https://tiktok-live-konektor.onrender.com
-  ```
+Consumer tidak perlu menjalankan konektor TikTok sendiri. `/api/v1/*` hanya membaca data. `/socket.io` memerlukan cookie dashboard dan bukan endpoint integrasi consumer.
 
-- Mode engine di status dapat berupa `node`, `python`, atau `none`; jangan anggap fallback Python tersedia tanpa deployment dan environment yang sesuai.
+## 2. Atur environment dan aktifkan LIVE
 
-## 2. Siapkan environment di konektor (Render)
+| Lokasi | Variabel | Nilai yang digunakan |
+| --- | --- | --- |
+| Server konektor | `API_KEY` | Secret acak minimal 32 karakter untuk REST dan `/live` |
+| Backend website | `TLK_API_KEY` | Nilai yang sama dengan `API_KEY` konektor |
+| Backend website | `TLK_BASE_URL` | Origin HTTPS deployment konektor, tanpa path |
+| Konektor dan receiver webhook | `WEBHOOK_SIGNING_SECRET` | Secret acak minimal 32 karakter yang sama di kedua server |
+| Konektor | `TIKTOK_USERNAME` | Username broadcaster tanpa `@` |
+| Konektor | `EULER_API_KEY` | Key Eulerstream dengan akses signer/gateway yang sesuai |
+| Konektor | `API_ALLOWED_ORIGINS` | Hanya untuk request consumer yang membawa `Origin` |
 
-Contoh **nama variabel**, bukan secret sungguhan:
+Konfigurasi dasar produksi (`ADMIN_USERNAME`, password awal, JWT secret, WS token dan storage persisten) ada di [README](../README.md#konfigurasi-environment). Blueprint Node menghasilkan secret; salin hanya secret yang diperlukan ke secret manager backend consumer. Jangan memakai prefix `VITE_`/`NEXT_PUBLIC_` untuk secret.
 
-```dotenv
-API_KEY=PASTE_RANDOM_SECRET_UNIK_PANJANG
-API_ALLOWED_ORIGINS=https://website-a.example,https://website-b.example
-TIKTOK_USERNAME=jalurtarot
-```
+Untuk integrasi backend tanpa header `Origin`, `API_ALLOWED_ORIGINS` boleh kosong. Bila request memang membawa `Origin`, daftar harus mencocokkan `scheme://host[:port]` persis, tanpa path atau trailing slash. Contoh: `https://website-a.example,https://website-b.example`. CORS bukan autentikasi, dan proteksi proxy website harus diatur pada proxy itu sendiri.
 
-1. Tambahkan `API_KEY` di **service Node `tiktok-live-konektor`**. Gunakan key acak panjang dan berbeda dari `JWT_SECRET`, `WS_TOKEN`, maupun `PYTHON_BRIDGE_TOKEN`.
-2. Tambahkan origin browser yang diizinkan pada `API_ALLOWED_ORIGINS`. Pisahkan dengan koma, gunakan **origin persis** (`scheme://host[:port]`), tanpa trailing slash/path. Ini berlaku untuk REST **yang membawa header Origin** dan external WebSocket browser.
-3. Simpan API key yang sama di **backend setiap website konsumen** dengan nama semisal `TLK_API_KEY`. Jangan menaruh API key di React/Vite frontend, HTML, kode yang dipublikasikan, ataupun URL publik.
-4. Periksa `GET /api/health` dan aktifkan koneksi LIVE melalui dashboard admin. `ok: true` hanya berarti server merespons; lihat `status` atau `running` untuk mengetahui koneksi ke TikTok.
-5. Untuk produksi dengan beberapa website, pertimbangkan **kunci terpisah per website**. Implementasi sekarang memakai **satu `API_KEY` bersama**; rotasi key akan memengaruhi semua consumer.
+Saat ini konektor memakai **satu API key dan satu secret signing bersama**; belum mendukung key berbeda per consumer. Rotasi memengaruhi semua consumer. `WS_TOKEN` adalah alternatif autentikasi WebSocket saja, bukan key REST, dan cookie admin tetap terpisah.
 
-**Catatan:** CORS / `API_ALLOWED_ORIGINS` bukan autentikasi. Permintaan server-to-server biasanya tidak memiliki `Origin`; mereka tetap harus mengirim API key. Akses langsung melalui browser dengan key di query WebSocket hanya cocok untuk klien terkontrol, **bukan website publik**.
+Login dashboard, isi username/Room ID bila perlu, lalu klik **Start LIVE** saat broadcaster sedang siaran. Engine dapat berupa `node`, `managed`, `python`, atau `none`. Node mencoba managed gateway pada error Business-plan jika Euler key ada, kemudian Python bila fallback dikonfigurasi. Health sukses atau WS terbuka belum membuktikan LIVE aktif: periksa `status: Connected` dan event nyata; `running: true` juga dapat berarti sedang connecting.
 
-## 3. Endpoint HTTP
+## 3. REST API dari backend
 
-| Method | Endpoint | Auth | Isi / fungsi |
+| Method | Endpoint | Auth | Respons |
 | --- | --- | --- | --- |
-| GET | `/api/health` | Tidak | `ok`, `status`, `engine` server |
-| GET | `/api/v1/status` | API key | `status`, `running`, `engine`, `pythonFallbackAvailable`, `roomId`, `lastEventAt`, `stats` |
-| GET | `/api/v1/stats` | API key | `stats` dan info akun / room |
-| GET | `/api/v1/events` | API key | `count`, `events` (terbaru dulu) |
+| GET | `/api/health` | Publik | `ok`, `status`, `engine` |
+| GET | `/api/v1/status` | API key | `ok`, `status`, `engine`, `running`, `username`, `roomId`, `lastEventAt`, `stats`, availability fallback |
+| GET | `/api/v1/stats` | API key | `ok`, `username`, `roomId`, `stats` |
+| GET | `/api/v1/events` | API key | `ok`, `count`, `events` terbaru dulu |
 
-Header untuk REST:
+Gunakan `Authorization: Bearer <API_KEY>` atau `X-API-Key: <API_KEY>`. Tidak ada kebutuhan cookie login pada endpoint ini.
 
-```http
-Authorization: Bearer YOUR_API_KEY
-```
-
-Sebagai alternatif, REST menerima `X-API-Key`. Endpoint `/api/health` sengaja publik.
-
-Contoh pengujian **dari terminal pribadi / backend**:
+Dari terminal/backend yang telah mendapatkan environment melalui secret manager:
 
 ```bash
-export TLK_BASE_URL="https://tiktok-live-konektor.onrender.com"
-export TLK_API_KEY="ISI_DARI_SECRET_MANAGER"
-
-curl -i "$TLK_BASE_URL/api/health"
-curl -i -H "Authorization: Bearer $TLK_API_KEY" "$TLK_BASE_URL/api/v1/status"
-curl -i -H "Authorization: Bearer $TLK_API_KEY" "$TLK_BASE_URL/api/v1/stats"
-curl -i -H "Authorization: Bearer $TLK_API_KEY" \
+# TLK_BASE_URL dan TLK_API_KEY harus sudah diinjeksi; jangan menulis secret di history shell.
+curl --fail-with-body "$TLK_BASE_URL/api/health"
+curl --fail-with-body -H "Authorization: Bearer $TLK_API_KEY" "$TLK_BASE_URL/api/v1/status"
+curl --fail-with-body -H "Authorization: Bearer $TLK_API_KEY" \
   "$TLK_BASE_URL/api/v1/events?type=chat,like,gift&limit=20"
 ```
 
-Opsi `GET /api/v1/events`:
-- `type`: tipe event dipisahkan koma, seperti `chat,like,gift`. Nilai yang dikenali: `chat`, `like`, `gift`, `follow`, `share`, `member`, `viewer`, `stream`.
-- `limit`: antara 1 dan 200 (default 50).
-- `before`: timestamp ISO 8601 sebagai batas waktu, misalnya `2026-10-08T13:00:00.000Z`. Gunakan URL encoding ketika dikirim pada URL.
+Opsi event history:
 
-Contoh bentuk satu event (data ilustrasi, bukan siaran nyata):
+- `type`: daftar dipisahkan koma. Jenis publik: `chat`, `like`, `gift`, `follow`, `share`, `member`, `viewer`, `stream`. Tanpa filter berarti semua jenis publik.
+- `limit`: gunakan integer `1–200`; default `50`.
+- `before`: ISO timestamp yang valid; hanya event **lebih lama** dari waktu itu dikembalikan. Gunakan `URLSearchParams` untuk encoding.
 
-```json
-{
-  "id": "9a18b3d0-33c9-4489-9ca2-e611f7baf784",
-  "event": "gift",
-  "timestamp": "2026-10-08T13:05:00.000Z",
-  "roomId": "7693584931198438164",
-  "username": "jalurtarot",
-  "version": 1,
-  "data": {
-    "username": "viewer_contoh",
-    "nickname": "Viewer",
-    "giftName": "Rose",
-    "repeatCount": 3,
-    "repeatEnd": true,
-    "diamondCount": 1,
-    "totalValue": 3
-  }
-}
-```
-
-`username` tingkat atas adalah penyiar; `data.username` adalah pengirim event. Statistik `stats` mencakup `chat`, `likes`, `gifts`, `giftCoins`, `follows`, `viewerCount`, `peakViewers`, dan `topGifter`. Jangan menyamakan nilai diamond atau `totalValue` dengan uang tunai.
-
-**Batasan data:** sejarah event dan statistik sekarang disimpan di **memori proses Node** (event history default maks. 500; konfigurasi mendukung hingga 2000). Restart, sleep Render, atau event burst dapat menyebabkan data hilang. `/api/v1/events` **bukan database permanen** dan `before` adalah filter waktu, bukan cursor penjamin pengiriman tepat sekali.
-
-## 4. Website Cloudflare Pages + Worker: REST backend/proxy
-
-Contoh Worker yang bisa dipasang pada route `/api/tiktok/*` milik website sendiri. Key tidak pernah diberikan ke browser. Contoh ini hanya mengekspos data yang boleh dilihat publik; **tambahkan autentikasi pengguna** jika statistik/event tidak boleh diakses sembarang pengunjung.
-
-Simpan secret pada Cloudflare Worker: `TLK_API_KEY`. Variabel `TLK_BASE_URL` opsional.
+Contoh server-side Node 24:
 
 ```js
-// worker.js — route: https://website-a.example/api/tiktok/*
+// status.mjs — environment diinjeksi di backend website.
+const base = new URL(process.env.TLK_BASE_URL);
+const key = process.env.TLK_API_KEY;
+if (!key) throw new Error('TLK_API_KEY wajib diisi');
+const url = new URL('/api/v1/events', base);
+url.searchParams.set('type', 'chat,like,gift');
+url.searchParams.set('limit', '20');
+const response = await fetch(url, {
+  headers: { Authorization: `Bearer ${key}` },
+  signal: AbortSignal.timeout(10_000),
+  redirect: 'error'
+});
+if (!response.ok) throw new Error(`Konektor HTTP ${response.status}`);
+const { events } = await response.json();
+console.log(events.map(({ id, event }) => ({ id, event })));
+```
+
+Polling memakai history yang terbatas, bukan cursor durable. Hindari interval cepat: REST dibatasi global 120 request/menit per IP bersama request HTTP lain. Untuk realtime gunakan WebSocket. History default maksimal 500 event, hingga 2000 sesuai konfigurasi; restart menghapus history dan statistik. `before` tidak menjamin recovery semua event yang terlewat.
+
+## 4. Cloudflare Pages + Worker sebagai proxy REST
+
+Pasang Worker pada route `https://website-anda.example/api/tiktok/*`. Isi `TLK_API_KEY` sebagai **Worker secret** dan `TLK_BASE_URL` sebagai variabel konfigurasi. Pages frontend hanya memanggil proxy miliknya, tanpa API key konektor.
+
+Contoh ini mempublikasikan status/event kepada pengunjung website. Bila data terbatas untuk pengguna tertentu, tambahkan autentikasi dan otorisasi pengguna **sebelum fetch upstream**; API key Worker tidak melindungi endpoint publik Worker.
+
+```js
+// worker.js
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-    const prefix = "/api/tiktok/";
-    if (request.method !== "GET" || !url.pathname.startsWith(prefix)) {
-      return new Response("Not found", { status: 404 });
+    const input = new URL(request.url);
+    const prefix = '/api/tiktok/';
+    const action = input.pathname.startsWith(prefix) ? input.pathname.slice(prefix.length) : '';
+    if (request.method !== 'GET' || !['status', 'stats', 'events'].includes(action)) {
+      return new Response('Not found', { status: 404 });
     }
-
-    const action = url.pathname.slice(prefix.length);
-    if (!["status", "stats", "events"].includes(action)) {
-      return new Response("Not found", { status: 404 });
+    if (!env.TLK_API_KEY || !env.TLK_BASE_URL) {
+      return Response.json({ error: 'Konfigurasi proxy belum lengkap' }, { status: 503 });
     }
-    if (!env.TLK_API_KEY) {
-      return new Response("Server secret belum diatur", { status: 503 });
-    }
-
-    const base = (env.TLK_BASE_URL || "https://tiktok-live-konektor.onrender.com")
-      .replace(/\/+$/, "");
-    const upstreamUrl = new URL(base + "/api/v1/" + action);
-    if (action === "events") {
-      const types = new Set(["chat", "like", "gift", "follow", "share", "member", "viewer", "stream"]);
-      const requested = (url.searchParams.get("type") || "chat,like,gift").split(",")
-        .map(x => x.trim()).filter(x => types.has(x));
-      const limit = Math.min(Math.max(Number.parseInt(url.searchParams.get("limit") || "20", 10) || 20, 1), 200);
-      upstreamUrl.searchParams.set("type", (requested.length ? requested : ["chat", "like", "gift"]).join(","));
-      upstreamUrl.searchParams.set("limit", String(limit));
-    }
-
     try {
-      const response = await fetch(upstreamUrl.toString(), {
-        headers: { Authorization: "Bearer " + env.TLK_API_KEY },
+      const base = new URL(env.TLK_BASE_URL);
+      if (base.protocol !== 'https:' || base.username || base.password ||
+          base.pathname !== '/' || base.search || base.hash) {
+        return Response.json({ error: 'TLK_BASE_URL harus origin HTTPS' }, { status: 503 });
+      }
+      const upstream = new URL('/api/v1/' + action, base);
+      if (action === 'events') {
+        upstream.searchParams.set('type', input.searchParams.get('type') || 'chat,like,gift');
+        const limit = Number(input.searchParams.get('limit') || 20);
+        if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+          return Response.json({ error: 'limit harus integer 1–200' }, { status: 400 });
+        }
+        upstream.searchParams.set('limit', String(limit));
+        const before = input.searchParams.get('before');
+        if (before) {
+          if (!Number.isFinite(Date.parse(before))) return Response.json({ error: 'before tidak valid' }, { status: 400 });
+          upstream.searchParams.set('before', before);
+        }
+      }
+      const response = await fetch(upstream, {
+        headers: { Authorization: 'Bearer ' + env.TLK_API_KEY },
+        signal: AbortSignal.timeout(10_000),
+        redirect: 'error',
         cf: { cacheTtl: 0 }
       });
-      // Hanya teruskan body respons, jangan teruskan header autentikasi/secret.
       return new Response(response.body, {
         status: response.status,
-        headers: {
-          "Content-Type": "application/json; charset=utf-8",
-          "Cache-Control": "no-store"
-        }
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
       });
     } catch {
-      return Response.json({ error: "Upstream TikTok LIVE tidak dapat dihubungi" }, { status: 502 });
+      return Response.json({ error: 'Upstream tidak dapat dihubungi' }, { status: 502 });
     }
   }
 };
 ```
 
-Di frontend website **milik origin yang sama**:
+Pada frontend yang memiliki origin sama dengan Worker:
 
 ```js
-const res = await fetch("/api/tiktok/status");
-if (!res.ok) throw new Error("Tidak bisa membaca status LIVE");
-const { status, running, engine, stats } = await res.json();
-console.log({ status, running, engine, stats });
+const response = await fetch('/api/tiktok/status');
+if (!response.ok) throw new Error(`Proxy HTTP ${response.status}`);
+const { status, engine, stats } = await response.json();
+// Render data sesuai kebutuhan website; tidak ada secret pada kode browser.
+console.log({ status, engine, stats });
 ```
 
-Jika Worker berfungsi sebagai proxy lintas domain, tambahkan kebijakan CORS **di proxy itu** dan validasi asal permintaan. Contoh di atas sengaja tidak mengaktifkan CORS umum. Untuk data sensitif, wajib verifikasi sesi/otorisasi pemakai **sebelum** meneruskan permintaan ke konektor. `API_ALLOWED_ORIGINS` di konektor bukan pengganti perlindungan proxy milik website.
+Worker di atas tidak meneruskan `Origin`, cookie atau Authorization pengguna ke konektor; hanya API key backend yang dikirim. Jika proxy berada di domain berbeda dari frontend, atur CORS spesifik pada Worker dan proteksi akses di sana.
 
-## 5. Realtime WebSocket (untuk komentar, like, gift)
+## 5. WebSocket realtime di backend website
 
-Endpoint eksternal:
+Endpoint `/live` menggunakan WebSocket biasa, bukan protokol Socket.IO. Header `Authorization: Bearer <API_KEY>` atau `<WS_TOKEN>` diterima. Filter `?events=chat,like,gift` (alias `?types=...`) membatasi jenis pesan. Tanpa filter semua event yang disiarkan diterima. Gunakan nama event yang didukung; filter berisi hanya jenis yang tidak dikenal jatuh kembali ke `chat,like,gift`.
 
-```text
-wss://tiktok-live-konektor.onrender.com/live
-```
-
-Gunakan autentikasi header ketika konek **dari server**:
-
-```http
-Authorization: Bearer YOUR_API_KEY
-```
-
-Bila hanya butuh event tertentu, tambahkan `?events=chat,like,gift` (atau `?types=...`). Tanpa filter, semua event yang disiarkan akan dikirim. WebSocket eksternal tidak mengharuskan cookie login dashboard.
-
-**Contoh consumer Node.js (backend saja):**
+Pasang dependency `ws` di proyek backend consumer:
 
 ```bash
 npm install ws
 ```
 
 ```js
-// consumer.mjs — jalankan di server website, JANGAN di frontend
-import WebSocket from "ws";
+// consumer.mjs — jalankan satu consumer pada backend website.
+import WebSocket from 'ws';
 
-const endpoint = "wss://tiktok-live-konektor.onrender.com/live?events=chat,like,gift";
+const base = new URL(process.env.TLK_BASE_URL);
+if (base.protocol !== 'https:' || base.username || base.password) throw new Error('Gunakan origin HTTPS konektor');
 const key = process.env.TLK_API_KEY;
-if (!key) throw Error("Set TLK_API_KEY di environment backend");
+if (!key) throw new Error('TLK_API_KEY wajib diisi');
+const endpoint = new URL('/live', base);
+endpoint.protocol = 'wss:';
+endpoint.searchParams.set('events', 'chat,like,gift');
+let retryMs = 2000;
+let stopping = false;
+let timer;
+let socket;
 
-let retryMs = 1000;
 function connect() {
-  const ws = new WebSocket(endpoint, {
-    headers: { Authorization: "Bearer " + key }
+  socket = new WebSocket(endpoint, {
+    headers: { Authorization: 'Bearer ' + key }, handshakeTimeout: 10_000, maxPayload: 256 * 1024
   });
-  ws.on("open", () => { retryMs = 1000; console.log("LIVE stream connected"); });
-  ws.on("message", raw => {
-    let msg;
-    try { msg = JSON.parse(raw.toString()); } catch { return; }
-    if (msg.event === "chat") console.log("CHAT", msg.data.username, msg.data.message);
-    if (msg.event === "like") console.log("LIKE", msg.data.username, msg.data.likeCount);
-    if (msg.event === "gift") console.log("GIFT", msg.id, msg.data.giftName, msg.data.repeatCount);
-    // Teruskan hanya informasi yang dibutuhkan ke frontend via SSE/Socket.IO sendiri.
+  socket.on('open', () => { retryMs = 2000; console.info('Transport realtime tersambung'); });
+  socket.on('message', raw => {
+    let event;
+    try { event = JSON.parse(raw.toString()); } catch { return; }
+    if (!event.id || !['chat', 'like', 'gift'].includes(event.event)) return;
+    // Relay hanya data yang diizinkan ke browser melalui SSE/Socket.IO milik website.
+    // Untuk reward, simpan ID dan proses gift streak secara idempotent di database.
+    console.info({ id: event.id, type: event.event });
   });
-  ws.on("error", err => console.error("LIVE stream error:", err.message));
-  ws.on("close", () => {
-    const wait = retryMs;
-    retryMs = Math.min(retryMs * 2, 30000);
-    setTimeout(connect, wait);
+  socket.on('error', () => console.warn('Koneksi realtime gagal; cek status/auth/log server'));
+  socket.on('close', () => {
+    if (stopping) return;
+    timer = setTimeout(connect, retryMs + Math.floor(Math.random() * 1000));
+    retryMs = Math.min(retryMs * 2, 60_000);
   });
 }
+function stop() { stopping = true; clearTimeout(timer); socket?.terminate(); }
+process.once('SIGTERM', stop);
+process.once('SIGINT', stop);
 connect();
 ```
 
-Untuk website publik gunakan **satu koneksi upstream di backend**, lalu fan-out ke browser lewat SSE, Socket.IO, atau WebSocket milik website. Jangan membuat satu koneksi langsung ke konektor dengan API key di browser setiap kali pengunjung membuka halaman. Format event sama pada engine Node/Python.
+`ws` merespons heartbeat ping secara otomatis. Koneksi eksternal dibatasi 30 percobaan/menit per IP; kurangi reconnect pada 401/403 dan perbaiki konfigurasi. Jangan log URL dengan credential. Perubahan API key memerlukan restart/reconnect consumer dengan nilai baru; koneksi yang sudah terbuka tidak dicabut otomatis hanya oleh rotasi environment.
 
-## 6. Webhook: memicu tindakan di website lain
+Mode browser langsung (`?key=<API_KEY>` atau `?token=<WS_TOKEN>`) masih didukung untuk klien terkontrol dengan `API_ALLOWED_ORIGINS` yang sesuai. Pada website publik, gunakan relay backend: credential query dapat dibaca pengguna dan tersimpan di log. Socket baru tidak menerima replay history; ambil REST history jika perlu dan deduplikasi terhadap pesan realtime.
 
-Pengaturan webhook sekarang bisa dilakukan dari **dashboard admin → Integrasi Webhook**. Login sebagai admin, klik **+ Tambah webhook**, masukkan URL HTTPS penerima, pilih event (`Semua event` berarti tanpa filter), aktifkan target, lalu klik **Simpan webhook**. Perubahan yang belum disimpan dapat dibatalkan. Maksimal 20 tujuan; webhook yang nonaktif tidak menerima kiriman.
+## 6. Webhook dengan verifikasi HMAC
 
-UI menggunakan endpoint baru `PUT /api/webhooks` dengan **cookie sesi admin**, yang hanya memperbarui daftar `webhooks` tanpa mengubah username/Room ID LIVE. Endpoint `PUT /api/config` lama tetap tersedia untuk konfigurasi admin umum. Kedua endpoint tetap hanya untuk admin dan bukan API v1 read-only bagi website publik. Contoh satu elemen array `webhooks`:
+1. Isi `WEBHOOK_SIGNING_SECRET` yang sama pada konektor dan backend receiver. Gunakan secret terpisah dari API/JWT/WS.
+2. Siapkan receiver HTTPS publik, misalnya `https://website-anda.example/hooks/tiktok`. Sertifikat TLS harus valid.
+3. Dashboard admin → **Integrasi Webhook** → tambah URL → pilih event → aktifkan → **Simpan webhook**. Daftar event kosong berarti semua jenis yang disiarkan.
+4. Mulai LIVE dan periksa receipt di receiver. Tidak ada tombol/API test webhook khusus saat ini; tes sintetik receiver tidak membuktikan delivery dari TikTok.
+
+Konfigurasi target yang disimpan lewat `PUT /api/webhooks` (cookie admin, bukan API key):
 
 ```json
-{
-  "url": "https://website-a.example/hooks/tiktok/SECRET_RANDOM_UNIK",
-  "enabled": true,
-  "events": ["chat", "gift"]
-}
+{"webhooks":[{"url":"https://website-anda.example/hooks/tiktok","enabled":true,"events":["chat","gift"]}]}
 ```
 
-Konfigurasi webhook disimpan melalui endpoint admin; endpoint `/api/v1/*` **tidak menyediakan** pembuatan webhook maupun kontrol LIVE untuk website lain. `PUT /api/webhooks` dan `PUT /api/config` tetap dilindungi sesi login admin dan tidak boleh dibuka untuk consumer publik. Konektor saat ini:
-- Mengirim `POST` JSON event via HTTPS ke URL yang terdaftar.
-- Menyertakan `x-tlk-event-id` dan `x-tlk-event-version` sebagai **metadata**, bukan bukti autentikasi.
-- Mencoba ulang saat respons gagal, dengan batas timeout/retry yang dapat dikonfigurasi.
-- Membatasi maksimal 20 webhook.
+Maksimal 20 target; URL duplikat, IP literal, local/private DNS, kredensial URL dan fragment ditolak. DNS diperiksa dan dipin saat TLS terhubung; redirect tidak diikuti. Semua target memakai signing secret yang sama.
 
-**Verifikasi webhook produksi:** isi `WEBHOOK_SIGNING_SECRET` dengan secret acak minimal 32 karakter pada konektor dan penerima. Webhook aktif pada production ditolak jika secret belum dikonfigurasi. Header `x-tlk-timestamp` berisi waktu Unix dalam detik; `x-tlk-signature` berisi `sha256=<hex>`. Signature dihitung dengan HMAC-SHA256 atas **timestamp + titik + body JSON mentah**, sebelum parsing JSON. Jangan menserialisasi ulang body untuk memverifikasi.
+Header delivery:
 
-Contoh verifikasi Node.js di penerima (pasang sebelum middleware JSON):
+| Header | Makna |
+| --- | --- |
+| `x-tlk-event-id` | Metadata ID event; gunakan ID dalam body setelah signature valid |
+| `x-tlk-event-version` | Metadata versi event, saat ini `1` |
+| `x-tlk-timestamp` | Waktu Unix saat setiap percobaan delivery, dalam detik |
+| `x-tlk-signature` | `sha256=` diikuti hex HMAC-SHA256 |
+
+Materi signature adalah **timestamp + titik + byte raw body**, bukan JSON yang diserialisasi ulang. Header ID/version tidak masuk materi signature. Payload body yang telah diverifikasi menjadi sumber ID/version terpercaya.
+
+Pasang `express` pada proyek receiver. Contoh berikut adalah receiver uji lengkap; deduplikasi memorinya bukan penyimpanan transaksi produksi.
+
+```bash
+npm install express
+# Injeksi WEBHOOK_SIGNING_SECRET ke environment, lalu:
+node receiver.mjs
+```
 
 ```js
+// receiver.mjs — letakkan route raw body SEBELUM app.use(express.json()).
 import crypto from 'node:crypto';
 import express from 'express';
 
+const secret = process.env.WEBHOOK_SIGNING_SECRET;
+if (!secret || secret.length < 32) throw new Error('WEBHOOK_SIGNING_SECRET minimal 32 karakter');
+const app = express();
+const receipts = new Map();
 app.post('/hooks/tiktok', express.raw({ type: 'application/json', limit: '256kb' }), (req, res) => {
-  const secret = process.env.WEBHOOK_SIGNING_SECRET;
-  if (!secret || !Buffer.isBuffer(req.body)) return res.sendStatus(503);
+  if (!Buffer.isBuffer(req.body)) return res.sendStatus(415);
   const timestamp = String(req.headers['x-tlk-timestamp'] || '');
   const signature = String(req.headers['x-tlk-signature'] || '');
   if (!/^\d{10}$/.test(timestamp) || Math.abs(Date.now() / 1000 - Number(timestamp)) > 300 ||
@@ -272,40 +268,69 @@ app.post('/hooks/tiktok', express.raw({ type: 'application/json', limit: '256kb'
   if (!crypto.timingSafeEqual(expected, supplied)) return res.sendStatus(401);
   let event;
   try { event = JSON.parse(req.body.toString('utf8')); } catch { return res.sendStatus(400); }
-  // Store event.id with a UNIQUE constraint before applying any reward.
-  // Process valid events idempotently in your own application.
-  res.sendStatus(204);
+  if (!event || typeof event.id !== 'string' || !event.id || typeof event.event !== 'string') return res.sendStatus(400);
+  const now = Date.now();
+  for (const [id, expiry] of receipts) if (expiry <= now) receipts.delete(id);
+  if (receipts.has(event.id)) return res.sendStatus(204);
+  if (receipts.size >= 10_000) return res.sendStatus(503);
+  // Pada produksi: simpan event.id dengan UNIQUE constraint dan perubahan bisnis
+  // dalam transaksi database, atau enqueue secara durable sebelum mengirim 2xx.
+  receipts.set(event.id, now + 24 * 60 * 60 * 1000);
+  console.info({ receivedId: event.id, type: event.event });
+  return res.sendStatus(204);
+});
+app.use(express.json());
+const server = app.listen(Number(process.env.PORT || 8080), '0.0.0.0', () => {
+  console.info('Receiver listening on ' + server.address().port);
 });
 ```
 
-Header ID/version tetap metadata; bukti autentikasi adalah signature yang terverifikasi. Gunakan HTTPS, secret terpisah dari API/JWT, rate limiting, dan penyimpanan ID event agar replay tidak menggandakan reward. DNS webhook wajib publik dan dipin saat koneksi; URL IP literal, jaringan privat, serta redirect ditolak. Antrean dibatasi empat pengiriman aktif dan 200 menunggu; overflow dicatat dan event pengiriman dilewati. Pengiriman tetap bersifat best-effort, bukan antrean transaksi tahan gangguan.
+Untuk aplikasi yang sudah memakai JSON parser global, pindahkan route ini ke atas parser atau capture raw body dengan hook `verify`; jangan mencoba memperoleh signature dari `JSON.stringify(req.body)`. Toleransi timestamp contoh ±5 menit memerlukan jam server yang sinkron.
 
-Semua handler harus **idempotent**: simpan `event.id` yang telah diproses di database consumer, pastikan kombinasi event tidak diproses dua kali, dan jangan gunakan penambahan koin langsung dari perulangan percobaan webhook. Perhatikan bahwa event dalam memori dapat hilang saat restart; pengiriman saat ini bukan *exactly once*.
+Receiver mengirim `2xx` hanya setelah pekerjaan diterima secara durable pada produksi. Konektor mencoba ulang respons non-2xx/error/timeout, default tiga retry setelah percobaan pertama, timeout 5 detik. Signature/timestamp dibuat ulang tiap percobaan; ID/body event tetap sama. Job dibatasi empat aktif dan 200 menunggu; overflow dan restart dapat kehilangan delivery. Antrean ini best-effort, bukan exactly-once.
 
-## 7. Pemilihan metode
+## 7. Format event dan gift streak
 
-| Kebutuhan consumer | Pilihan |
+Contoh ilustrasi:
+
+```json
+{
+  "id":"9a18b3d0-33c9-4489-9ca2-e611f7baf784",
+  "event":"gift",
+  "timestamp":"2026-10-11T01:05:00.000Z",
+  "roomId":"7693584931198438164",
+  "username":"penyiar_contoh",
+  "version":1,
+  "data":{
+    "username":"viewer_contoh","nickname":"Viewer",
+    "giftId":"5655","giftName":"Rose","repeatCount":3,"repeatEnd":true,
+    "giftType":1,"streakable":true,"diamondCount":1,"totalValue":3
+  }
+}
+```
+
+`username` tingkat atas adalah penyiar; `data.username` adalah aktor event. `roomId` dapat null. Metadata gift tidak dijamin lengkap: pakai `giftId` untuk aturan stabil bila nama tidak ada. Payload terlalu besar dapat diganti `data.truncated: true`; periksa sebelum memproses field bisnis.
+
+Deduplikasi `event.id` mencegah pemrosesan **event yang sama** akibat retry atau overlap REST/realtime. Gift streak dapat menghasilkan **beberapa ID berbeda** dengan `repeatCount` kumulatif: misalnya 1, 2, 3. Menjumlahkan 1+2+3 memberi hasil salah. Gunakan delta repeatCount untuk streak aktif atau proses total saat `repeatEnd` sesuai kebutuhan, dengan penanganan restart/akhir streak. Jangan menganggap `totalValue` sebagai delta, uang tunai, atau bukti transaksi finansial.
+
+`stats` meliputi `chat`, `likes`, `gifts`, `giftCoins`, `follows`, `viewerCount`, `peakViewers`, `topGifter`. History/statistik hilang saat restart. LIVE sehat tidak menjamin semua event diterima; simpan data penting pada consumer dengan aturan idempotency yang sesuai.
+
+## 8. Verifikasi dan troubleshooting
+
+| Gejala | Periksa |
 | --- | --- |
-| Dashboard jumlah komentar/like/gift dan status | REST API dari backend, refresh berkala |
-| Overlay atau game yang perlu event seketika | WebSocket backend → browser dengan relay sendiri |
-| Gift memicu workflow/animasi server | Webhook + idempotency + verifikasi request |
-| Banyak website menggunakan akun TikTok yang sama | Satu service konektor pusat, banyak consumer |
-| Koneksi Node tidak berhasil ketika Start LIVE | Python fallback **jika layanan terpasang dan diatur** |
+| REST/WS `401` | Key salah/tidak dikirim; REST hanya menerima API_KEY, bukan WS_TOKEN |
+| Request dengan Origin `403` | Exact origin consumer belum diizinkan; endpoint admin hanya menerima origin dashboard yang sama |
+| REST `/api/v1/*` `503` | API_KEY belum dikonfigurasi |
+| Login/sesi admin gagal | Kredensial dashboard terpisah; logout/perubahan password mencabut sesi; produksi memerlukan HTTPS untuk cookie Secure |
+| `429` | Kurangi polling/reconnect; HTTP 120/menit, login 10/15 menit, WS 30 percobaan/menit per IP |
+| Health sukses, event kosong | Pastikan Start LIVE berhasil dan broadcaster aktif; periksa status Connected dan entitlement signer/gateway |
+| Error Business plan | Community key tidak mengizinkan Business signing; cek akses Cloud WebSocket atau Python yang dikonfigurasi |
+| Webhook tidak bisa diaktifkan | Signing secret produksi belum diisi, URL tidak memenuhi syarat, atau target duplikat |
+| Receiver menolak HMAC | Secret berbeda, body diparse/diserialisasi ulang, signature format salah atau jam selisih lebih dari 5 menit |
+| Webhook gagal dikirim | TLS/DNS/allowlist, redirect, HTTP non-2xx, timeout atau antrean penuh; periksa log kedua service |
+| Koin terhitung ganda | Deduplikasi ID dan penanganan repeatCount kumulatif gift streak harus terpisah |
+| Data hilang setelah reconnect | WebSocket tidak replay; REST history terbatas dan tidak persisten |
+| Python tidak tersedia | Deploy service terpisah, atur origin HTTPS dan token yang sama di kedua service |
 
-## 8. Troubleshooting
-
-| Gejala | Pemeriksaan |
-| --- | --- |
-| HTTP `401` REST / handshake WS | `API_KEY` salah, tidak dikirim, atau salah cara autentikasi |
-| HTTP `403` dengan `Origin` | Origin browser belum termasuk `API_ALLOWED_ORIGINS` secara persis |
-| HTTP `503` di `/api/v1/*` | `API_KEY` belum ada di environment konektor |
-| HTTP `429` | Limit koneksi / request; kurangi reconnect/polling |
-| `/api/health` sukses tetapi LIVE offline | Backend hidup tetapi belum `Start LIVE` atau tidak terhubung ke TikTok |
-| Event kosong setelah restart | History hanya disimpan di memori |
-| Event berhenti dan koneksi terputus | Cek status LIVE, log Render, reconnect ber-backoff |
-| Python fallback tidak dipakai | Cek deployment `tiktok-live-python`, `PYTHON_FALLBACK_URL` atau `PYTHON_FALLBACK_HOSTNAME`, dan `PYTHON_FALLBACK_TOKEN` di Node |
-| Koin/gift terhitung ganda | Gunakan `event.id` untuk idempotency, pahami gift streak dan retry webhook |
-
-**Checklist produksi**: secret hanya pada backend, exact origin bila perlu browser, konektor LIVE aktif, consumer menggunakan retry/backoff, tidak ada API key di browser, webhook dilindungi, data penting disimpan persisten, dan setiap situs punya pembatasan akses serta observabilitas masing-masing.
-
-Lihat juga [README utama](../README.md) untuk konfigurasi Render, autentikasi admin, dan Python fallback.
+Sebelum digunakan: verifikasi REST autentikasi, sambungan WS, signature salah ditolak, duplicate tidak diproses dua kali, event TikTok nyata diterima dan tidak ada credential pada frontend. Tes receiver lokal/sintetik memeriksa handler; delivery upstream nyata tetap perlu diuji pada deployment Anda.
