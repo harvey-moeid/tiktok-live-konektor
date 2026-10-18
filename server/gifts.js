@@ -15,7 +15,7 @@ function firstName(...values) {
 
 function firstId(...values) {
   for (const value of values) {
-    if (typeof value !== 'string' && typeof value !== 'number') continue;
+    if (!['string', 'number', 'bigint'].includes(typeof value)) continue;
     const id = String(value).trim();
     if (/^[1-9]\d*$/.test(id)) return id;
   }
@@ -65,8 +65,10 @@ export function normalizeGiftData(data, nameCache = new Map()) {
   );
   const giftType = firstNumber(d.giftType, d.gift_type, gift.giftType, gift.gift_type);
   const repeatEnd = Boolean(d.repeatEnd ?? d.repeat_end ?? gift.repeatEnd ?? gift.repeat_end);
+  const groupId = firstId(d.groupId, d.group_id, gift.groupId, gift.group_id);
 
   return {
+    ...(groupId ? { groupId } : {}),
     giftId,
     giftName,
     repeatCount,

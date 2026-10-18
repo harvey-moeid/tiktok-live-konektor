@@ -109,3 +109,6 @@ button{border:1px solid var(--line);border-radius:11px;padding:10px 13px;backgro
   .event-identity{flex-wrap:wrap;gap:3px}
   .history-feedback{margin:0 12px 9px}
 }
+.webhook-delivery-status{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px;margin-bottom:18px;flex-wrap:wrap}
+.webhook-delivery-status p{margin:8px 0;color:var(--muted,#94a3b8)}
+.webhook-delivery-status [role=alert]{color:#ff808b}

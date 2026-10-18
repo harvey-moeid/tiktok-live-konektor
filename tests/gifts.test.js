@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeGiftData } from '../server/gifts.js';
 
+test('normalizes optional streak group identity without adding a placeholder field', () => {
+  assert.equal(normalizeGiftData({ giftId: 1, groupId: 123n }).groupId, '123');
+  assert.equal(Object.hasOwn(normalizeGiftData({ giftId: 1 }), 'groupId'), false);
+});
+
 test('reads giftName from the top-level TikTok gift event', () => {
   const d = normalizeGiftData({ giftName: 'Rose', giftId: 5655, repeatCount: 3, repeatEnd: true, diamondCount: 1, giftType: 1 });
   assert.deepEqual(d, {

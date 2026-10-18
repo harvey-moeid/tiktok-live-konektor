@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { createWebSocketUrl } from '@eulerstream/euler-websocket-sdk';
-import { createEvent } from './events.js';
+import { createEvent, sourceMessageId } from './events.js';
 import { normalizeGiftData } from './gifts.js';
 
 const STREAM_TYPES = new Set(['chat', 'like', 'gift', 'follow', 'share', 'member', 'viewer']);
@@ -45,7 +45,7 @@ export function normalizeManagedMessage(type, data, giftNames = new Map()) {
     case 'share':
       return { event: 'share', data: person };
     case 'social': {
-      const action = String(pick(data.displayType, data.action, data.socialType, '')).toLowerCase();
+      const action = String(pick(data.displayType, data.action, data.socialType, data.common?.displayText?.key, '')).toLowerCase();
       if (action.includes('follow')) return { event: 'follow', data: person };
       if (action.includes('share')) return { event: 'share', data: person };
       return null;
@@ -248,8 +248,12 @@ export class ManagedLiveConnection {
           // An actual webcast event is stronger proof of an active LIVE session
           // than a transport-level WebSocket 'open' or gateway 'tiktok.connect'.
           if (!this.connected) markConnected(roomIdOf(data));
+          const upstreamId = sourceMessageId(data.common?.msgId, data.msgId, data.messageId);
           const item = createEvent(normalized.event, normalized.data, {
-            username: clean, roomId: this.roomId
+            username: clean, roomId: this.roomId,
+            sourceId: upstreamId && (normalized.event === 'gift'
+              ? JSON.stringify([String(upstreamId), normalized.data.repeatCount, normalized.data.repeatEnd])
+              : String(upstreamId))
           });
           // Buffer until the controller has announced stream started. Async
           // microtask ordering is insufficient across nested await/then chains.

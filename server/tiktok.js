@@ -1,6 +1,5 @@
 import { TikTokLiveConnection, ControlEvent, WebcastEvent } from 'tiktok-live-connector';
-import { broadcast } from './ws.js';
-import { createEvent, safeJsonValue } from './events.js';
+import { createEvent, safeJsonValue, sourceMessageId } from './events.js';
 import { normalizeGiftData } from './gifts.js';
 import { EULER_BUSINESS_PLAN_MESSAGE, isEulerBusinessPlanError } from './signing-error.js';
 import { redactText, redactDiagnostic } from './diagnostics.js';
@@ -95,7 +94,7 @@ async function directHtmlRoomId(username) {
 }
 
 export class TikTokService {
-  constructor({ emitEvent, setStatus }) {
+  constructor({ emitEvent, setStatus, connectionFactory = (username, options) => new TikTokLiveConnection(username, options) }) {
     this.emitEvent = emitEvent;
     this.setStatus = setStatus;
     this.connection = null;
@@ -104,13 +103,16 @@ export class TikTokService {
     this.roomId = '';
     this.streamActive = false;
     this.giftNames = new Map();
+    this.connectionFactory = connectionFactory;
+    this.generation = 0;
   }
 
   emit(type, data) {
-    const event = createEvent(type, data, { username: this.username, roomId: this.roomId });
+    const sourceId = this.sourceId && (type === 'gift'
+      ? JSON.stringify([String(this.sourceId), data.repeatCount, data.repeatEnd]) : this.sourceId);
+    const event = createEvent(type, data, { username: this.username, roomId: this.roomId, sourceId });
     debug('[TikTok] Event=' + type + ' room=' + (this.roomId || 'unknown'));
     this.emitEvent(event);
-    broadcast(event);
   }
 
   emitStreamEnded() {
@@ -120,7 +122,13 @@ export class TikTokService {
   }
 
   bind(c) {
-    const on = (name, handler) => c.on(name, handler);
+    const generation = this.generation;
+    const on = (name, handler) => c.on(name, (...args) => {
+      if (this.connection !== c || generation !== this.generation) return;
+      const d = args[0];
+      this.sourceId = sourceMessageId(d?.common?.msgId, d?.msgId, d?.messageId);
+      try { handler(...args); } finally { this.sourceId = null; }
+    });
 
     on(ControlEvent.CONNECTED, s => {
       this.roomId = String(s?.roomId || c?.roomId || this.roomId || '');
@@ -134,8 +142,8 @@ export class TikTokService {
       this.running = false;
       if (this.connection === c) this.connection = null;
       console.warn('[TikTok] Disconnected', JSON.stringify(redactDiagnostic(detail)));
-      this.setStatus('Disconnected');
       this.emitStreamEnded();
+      this.setStatus('Disconnected');
     });
     on(ControlEvent.ERROR, e => {
       const d = errorDetails(e);
@@ -177,6 +185,9 @@ export class TikTokService {
       nickname: nicknameOf(d),
       memberCount: numberOf(d?.memberCount, d?.member_count)
     }));
+    for (const type of [WebcastEvent.FOLLOW, WebcastEvent.SHARE]) {
+      on(type, d => this.emit(type, { username: usernameOf(d), nickname: nicknameOf(d) }));
+    }
     for (const eventName of ['emote', 'envelope', 'questionNew', 'linkMicBattle', 'linkMicArmies', 'liveIntro', 'subscribe', 'goalUpdate', 'roomMessage', 'captionMessage', 'imDelete', 'inRoomBanner', 'rankUpdate', 'pollMessage', 'rankText']) {
       on(eventName, d => this.emit(eventName, safeJsonValue(d)));
     }
@@ -214,6 +225,7 @@ export class TikTokService {
 
   async start(username, roomId = '') {
     if (this.running || this.connection) await this.stop();
+    const generation = ++this.generation;
     this.username = String(username || '').replace(/^@/, '').trim();
     this.giftNames.clear();
     let explicitRoomId = String(roomId || '').trim();
@@ -223,7 +235,7 @@ export class TikTokService {
     this.setStatus('Connecting...');
     this.running = true;
     const timeoutMs = requestTimeoutMs();
-    this.connection = new TikTokLiveConnection(this.username, {
+    this.connection = this.connectionFactory(this.username, {
       // Load TikTok's room gift catalogue so gift names are available even when
       // the base webcast payload only carries an ID.
       enableExtendedGiftInfo: true,
@@ -235,11 +247,15 @@ export class TikTokService {
       wsClientOptions: { handshakeTimeout: timeoutMs }
     });
     this.bind(this.connection);
+    const connection = this.connection;
+    const ensureCurrent = () => {
+      if (generation !== this.generation || this.connection !== connection) throw Error('Koneksi TikTok dibatalkan.');
+    };
 
     try {
       if (!explicitRoomId) {
         try {
-          explicitRoomId = String(await this.connection.fetchRoomId() || '').trim();
+          explicitRoomId = String(await connection.fetchRoomId() || '').trim();
           if (explicitRoomId) {
             console.log('[TikTok] Native resolver Room ID=' + explicitRoomId +
               ' euler=' + (eulerApiKey ? 'configured' : 'anonymous'));
@@ -248,6 +264,7 @@ export class TikTokService {
           console.warn('[TikTok] Native Room ID discovery failed:', JSON.stringify(errorDetails(resolveError)));
         }
 
+        ensureCurrent();
         if (!explicitRoomId) {
           explicitRoomId = await directHtmlRoomId(this.username);
         }
@@ -260,15 +277,21 @@ export class TikTokService {
         }
       }
 
+      ensureCurrent();
       this.roomId = explicitRoomId;
       console.log('[TikTok] Connecting @' + this.username +
         ' roomId=' + explicitRoomId +
         ' source=' + (roomId ? 'manual' : 'resolved') +
         ' euler=' + (eulerApiKey ? 'configured' : 'anonymous'));
-      const state = await this.connection.connect(explicitRoomId);
+      const state = await connection.connect(explicitRoomId);
+      ensureCurrent();
       this.roomId = String(state?.roomId || this.connection?.roomId || explicitRoomId || '');
       return state;
     } catch (e) {
+      if (generation !== this.generation) {
+        try { await connection.disconnect(); } catch {}
+        throw e;
+      }
       const failedConnection = this.connection;
       this.running = false;
       this.connection = null;
@@ -295,10 +318,12 @@ export class TikTokService {
   }
 
   async stop() {
+    this.generation++;
     const c = this.connection;
     this.running = false;
     this.connection = null;
     if (c) try { await c.disconnect(); } catch (e) { debug('[TikTok] Disconnect warning:', e?.message || String(e)); }
+    this.emitStreamEnded();
     this.setStatus('Disconnected');
   }
 }

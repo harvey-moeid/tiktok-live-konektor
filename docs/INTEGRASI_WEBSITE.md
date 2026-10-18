@@ -46,6 +46,7 @@ Login dashboard, isi username/Room ID bila perlu, lalu klik **Start LIVE** saat 
 | Method | Endpoint | Auth | Respons |
 | --- | --- | --- | --- |
 | GET | `/api/health` | Publik | `ok`, `status`, `engine` |
+| GET | `/api/ready` | Publik | HTTP 200 jika siap; 503 bila ingest yang diharapkan atau delivery bermasalah |
 | GET | `/api/v1/status` | API key | `ok`, `status`, `engine`, `running`, `username`, `roomId`, `lastEventAt`, `stats`, availability fallback |
 | GET | `/api/v1/stats` | API key | `ok`, `username`, `roomId`, `stats` |
 | GET | `/api/v1/events` | API key | `ok`, `count`, `events` terbaru dulu |
@@ -287,7 +288,9 @@ const server = app.listen(Number(process.env.PORT || 8080), '0.0.0.0', () => {
 
 Untuk aplikasi yang sudah memakai JSON parser global, pindahkan route ini ke atas parser atau capture raw body dengan hook `verify`; jangan mencoba memperoleh signature dari `JSON.stringify(req.body)`. Toleransi timestamp contoh ±5 menit memerlukan jam server yang sinkron.
 
-Receiver mengirim `2xx` hanya setelah pekerjaan diterima secara durable pada produksi. Konektor mencoba ulang respons non-2xx/error/timeout, default tiga retry setelah percobaan pertama, timeout 5 detik. Signature/timestamp dibuat ulang tiap percobaan; ID/body event tetap sama. Job dibatasi empat aktif dan 200 menunggu; overflow dan restart dapat kehilangan delivery. Antrean ini best-effort, bukan exactly-once.
+Receiver mengirim `2xx` hanya setelah pekerjaan diterima secara durable pada produksi. Konektor mengomit job ke outbox SQLite pada disk persisten sebelum mengirim, lalu mencoba ulang respons non-2xx/error/timeout: default tiga retry setelah percobaan pertama, timeout 5 detik. Signature/timestamp dibuat ulang tiap percobaan; ID/body event tetap sama. Default batasnya empat delivery aktif, 10.000 job pending/gagal atau 100 MiB payload antrean. Restart melanjutkan pending; job gagal tetap tersimpan untuk retry admin melalui dashboard atau `POST /api/webhooks/retry` dengan cookie admin. Status tersedia pada `GET /api/webhooks/status` dengan autentikasi admin. Menonaktifkan/menghapus destinasi membatalkan backlog-nya.
+
+Job yang berhasil dikomit memakai semantik at-least-once, sehingga consumer wajib melakukan deduplikasi secara durable berdasarkan `event.id`. Overflow/storage gagal menyebabkan penolakan enqueue yang tercatat dan readiness 503; event tersebut belum tersimpan untuk replay. Outbox tidak menyediakan exactly-once dan tidak dapat mengambil kembali event yang tidak pernah diterima ketika koneksi TikTok terputus.
 
 ## 7. Format event dan gift streak
 
@@ -313,7 +316,9 @@ Contoh ilustrasi:
 
 Deduplikasi `event.id` mencegah pemrosesan **event yang sama** akibat retry atau overlap REST/realtime. Gift streak dapat menghasilkan **beberapa ID berbeda** dengan `repeatCount` kumulatif: misalnya 1, 2, 3. Menjumlahkan 1+2+3 memberi hasil salah. Gunakan delta repeatCount untuk streak aktif atau proses total saat `repeatEnd` sesuai kebutuhan, dengan penanganan restart/akhir streak. Jangan menganggap `totalValue` sebagai delta, uang tunai, atau bukti transaksi finansial.
 
-`stats` meliputi `chat`, `likes`, `gifts`, `giftCoins`, `follows`, `viewerCount`, `peakViewers`, `topGifter`. History/statistik hilang saat restart. LIVE sehat tidak menjamin semua event diterima; simpan data penting pada consumer dengan aturan idempotency yang sesuai.
+`stats` meliputi `chat`, `likes`, `gifts`, `giftCoins`, `follows`, `viewerCount`, `peakViewers`, `topGifter`, serta `trackingLimited` jika batas pelacakan tercapai. Akumulasi pengirim tersimpan terpisah dari tampilan 10 besar. Delta hanya diterapkan pada gift streakable; gift non-streak dihitung independen. `stream.started.data.resumed: true` menandai pemulihan transport ke Room ID yang sama, sehingga statistik proses dipertahankan; sesi baru mereset statistik.
+
+`event.id` bersifat opaque: bila ID pesan upstream tersedia, konektor menghasilkan ID stabil yang dipisahkan berdasarkan akun, ruangan, jenis event dan progres gift. Replay dikenali dalam jendela memori terbatas (10 menit/10.000 ID); tanpa identitas upstream, deduplikasi replay tidak dijamin. Jangan memvalidasi ID hanya sebagai UUID. Status REST juga menyediakan `desiredRunning`, `reconnectAttempts`, `nextRetryAt` dan `recoveryExhausted`. Startup melanjutkan intent Start terakhir; Stop eksplisit membatalkannya. History/statistik tetap hilang saat proses restart. LIVE sehat tidak menjamin semua event diterima; simpan data penting pada consumer dengan aturan idempotency yang sesuai.
 
 ## 8. Verifikasi dan troubleshooting
 

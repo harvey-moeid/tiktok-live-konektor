@@ -4,6 +4,7 @@ client/dist/
 .env.*
 !.env.example
 data/*.json
+data/*.sqlite*
 npm-debug.log*
 .DS_Store
 __pycache__/

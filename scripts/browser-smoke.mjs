@@ -47,6 +47,8 @@ try {
   await page.getByRole('button', { name: 'Logout', exact: true }).waitFor();
   await page.getByText('Disconnected', { exact: true }).waitFor();
   await page.getByRole('tab', { name: /Integrasi Webhook/ }).click();
+  await page.getByText('Status pengiriman', { exact: true }).waitFor();
+  await page.getByText('0 menunggu · 0 gagal', { exact: true }).waitFor();
   await page.getByRole('button', { name: '+ Tambah webhook', exact: true }).click();
   await page.getByLabel('URL endpoint webhook').fill('https://169.254.169.254/hook');
   await page.getByRole('button', { name: 'Simpan webhook', exact: true }).click();
@@ -69,7 +71,7 @@ try {
   assert.equal((await page.request.get('http://127.0.0.1:' + port + '/api/state')).status(), 401);
   assert.ok(sockets.some(url => url.includes('/socket.io/')), 'dashboard must open realtime websocket');
   assert.deepEqual(errors, [], 'no browser runtime or CSP errors');
-  console.log('Browser smoke passed: login, realtime, webhook validation/save/reload/cancel, mobile layout, logout.');
+  console.log('Browser smoke passed: login, realtime, delivery diagnostics, webhook validation/save/reload/cancel, mobile layout, logout.');
 } finally {
   clearTimeout(timeout);
   await browser?.close();

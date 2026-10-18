@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { safeJsonValue, serializeEvent, normalizeEvent, createEvent } from '../server/events.js';
+import { safeJsonValue, serializeEvent, normalizeEvent, createEvent, sourceMessageId } from '../server/events.js';
+
+test('zero protobuf message IDs are missing identities, not deduplication keys', () => {
+  assert.equal(sourceMessageId('0', 0n, '000'), null);
+  assert.equal(sourceMessageId('0', 'actual-message'), 'actual-message');
+  assert.equal(sourceMessageId(123n), '123');
+});
+
+test('upstream identities remain stable across retries and separate rooms and event types', () => {
+  const meta = { username: 'broadcaster', roomId: '123456789', sourceId: 'message-1' };
+  assert.equal(createEvent('chat', {}, meta).id, createEvent('chat', {}, meta).id);
+  assert.notEqual(createEvent('chat', {}, meta).id, createEvent('gift', {}, meta).id);
+  assert.notEqual(createEvent('chat', {}, meta).id, createEvent('chat', {}, { ...meta, roomId: '987654321' }).id);
+  assert.notEqual(createEvent('chat', {}).id, createEvent('chat', {}).id);
+});
 
 test('safeJsonValue handles bigint and circular objects', () => {
   const value = { n: 12n };

@@ -15,12 +15,12 @@ export async function resolvePublicAddress(hostname, lookup = dns.lookup) {
   return records[0];
 }
 
-export function sendWebhook(value, body, headers, timeoutMs) {
+export function sendWebhook(value, body, headers, timeoutMs, signal) {
   const url = publicWebhookUrl(value);
   return new Promise((resolve, reject) => {
     // Resolve once at connection time; the checked address is the one TLS uses.
     const request = https.request(url, {
-      method: 'POST', agent: false, signal: AbortSignal.timeout(timeoutMs),
+      method: 'POST', agent: false, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
       headers: { ...headers, 'content-length': Buffer.byteLength(body) },
       lookup(hostname, options, callback) {
         resolvePublicAddress(hostname).then(record => {
@@ -32,7 +32,7 @@ export function sendWebhook(value, body, headers, timeoutMs) {
       const status = response.statusCode;
       response.destroy(); // Response bodies are not needed, and may be unbounded.
       if (status >= 200 && status < 300) resolve();
-      else reject(Error('HTTP ' + status)); // Redirects are never followed.
+      else reject(Object.assign(Error('HTTP ' + status), { code: 'HTTP_' + status })); // Redirects are never followed.
     });
     request.once('error', reject);
     request.end(body);

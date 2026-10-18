@@ -146,7 +146,7 @@ function Dashboard({logout}){
     setBusy(true);
     try{
       const x=await api('/api/config',{method:'PUT',body:JSON.stringify({tiktokUsername:c?.tiktokUsername||'',tiktokRoomId:c?.tiktokRoomId||''})});
-      setC(x);setS(v=>({...v,username:x.tiktokUsername,roomId:v.running?v.roomId:x.tiktokRoomId||null}));setNotice('Konfigurasi tersimpan');
+      setC(x);setS(v=>({...v,username:v.desiredRunning?v.username:x.tiktokUsername,roomId:(v.desiredRunning||v.running)?v.roomId:x.tiktokRoomId||null}));setNotice('Konfigurasi tersimpan');
     }catch(e){setNotice(e.message)}finally{setBusy(false)}
   }
 
@@ -167,7 +167,7 @@ function Dashboard({logout}){
   return <main className="app-shell">
     <header>
       <div className="brand compact-brand"><span className="brand-mark">TLK</span><div><strong>TikTok Live Konektor</strong><small>Realtime dashboard</small></div></div>
-      <div className={'status '+(connected?'online':'offline')}><i></i><span>{s.status}</span><b>@{c?.tiktokUsername||s.username||'—'}</b></div>
+      <div className={'status '+(connected?'online':'offline')}><i></i><span>{s.status}</span><b>@{s.username||c?.tiktokUsername||'—'}</b></div>
       <button className="ghost" onClick={async()=>{try{await api('/api/auth/logout',{method:'POST'});logout()}catch(e){setNotice(e.message)}}}>Logout</button>
     </header>
 
@@ -186,9 +186,11 @@ function Dashboard({logout}){
           <label>Room ID <em>opsional</em></label>
           <input inputMode="numeric"value={c?.tiktokRoomId||''}onChange={e=>setC(v=>({...v,tiktokRoomId:e.target.value.replace(/\D/g,'')}))}placeholder="Kosongkan untuk otomatis"/>
           <small className="hint">Biarkan kosong bila resolver otomatis aktif.</small>
-          <div className="buttons"><button className="secondary" onClick={save}disabled={busy||!c}>Simpan</button>{s.running?<button className="danger" onClick={stop}disabled={busy}>Stop LIVE</button>:<button className="primary" onClick={start}disabled={busy||!c}>{busy?'Menghubungkan…':'Start LIVE'}</button>}</div>
+          <div className="buttons"><button className="secondary" onClick={save}disabled={busy||!c}>Simpan</button>{(s.desiredRunning||s.running)?<button className="danger" onClick={stop}disabled={busy}>Stop LIVE</button>:<button className="primary" onClick={start}disabled={busy||!c}>{busy?'Menghubungkan…':'Start LIVE'}</button>}</div>
           {configError&&<div className="error" role="alert">{configError}<button onClick={retryConfig}>Muat ulang</button></div>}
           {notice&&<div className="notice">{notice}</div>}{s.error&&<div className="error-detail">{s.error}</div>}
+          {s.nextRetryAt&&<div className="notice">Mencoba tersambung kembali. Anda dapat menekan Stop LIVE untuk membatalkan.</div>}
+          {s.recoveryExhausted&&<div className="error-detail">Pemulihan otomatis berhenti. Tekan Stop LIVE, lalu Start LIVE untuk mencoba kembali.</div>}
         </div>
 
         <div className="stats-grid">
@@ -199,6 +201,7 @@ function Dashboard({logout}){
           <Stat label="Viewer" value={stats.viewerCount} sub={'Peak '+compact(stats.peakViewers)}/>
           <Stat label="Follow" value={stats.follows}/>
         </div>
+        {stats.trackingLimited&&<div className="error-detail">Statistik sesi ini tidak lengkap karena batas pelacakan tercapai.</div>}
       </aside>
 
       <section className="panel feed">
@@ -213,7 +216,7 @@ function Dashboard({logout}){
       </section>
     </section>
     <div className="webhook-shell" hidden={tab!=='webhooks'}>
-      {c?<WebhookSettings initialHooks={c.webhooks} onSave={saveWebhooks} signingEnabled={c.webhookSigningEnabled}/>:<section className="webhook-load-error panel">
+      {c?<WebhookSettings initialHooks={c.webhooks} onSave={saveWebhooks} signingEnabled={c.webhookSigningEnabled} active={tab==='webhooks'}/>:<section className="webhook-load-error panel">
         <h2>Pengaturan webhook belum tersedia</h2>
         <p>{configError||'Memuat konfigurasi admin…'}</p>
         <button type="button" className="secondary" onClick={retryConfig}>Muat ulang</button>

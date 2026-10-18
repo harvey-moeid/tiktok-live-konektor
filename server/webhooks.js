@@ -1,10 +1,41 @@
 import { serializeEvent } from './events.js';
 import { publicWebhookUrl } from '../client/src/webhook-url.js';
 import { sendWebhook } from './webhook-delivery.js';
-import { WorkQueue } from './work-queue.js';
+import { WebhookOutbox } from './webhook-outbox.js';
 import crypto from 'node:crypto';
+import path from 'node:path';
 
-const deliveryQueue = new WorkQueue();
+let outbox;
+
+function setting(name, fallback, min, max) {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) ? Math.min(max, Math.max(min, Math.trunc(value))) : fallback;
+}
+
+export function initializeWebhooks(webhooks = []) {
+  if (outbox) return;
+  const directory = path.dirname(path.resolve(process.env.CONFIG_FILE || './data/config.json'));
+  outbox = new WebhookOutbox({
+    file: path.resolve(process.env.WEBHOOK_OUTBOX_FILE || path.join(directory, 'webhook-outbox.sqlite')),
+    capacity: setting('WEBHOOK_QUEUE_CAPACITY', 10_000, 20, 100_000),
+    maxBytes: setting('WEBHOOK_QUEUE_MAX_BYTES', 100 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024),
+    maxAttempts: setting('WEBHOOK_RETRIES', 3, 0, 20) + 1,
+    autoStart: false,
+    onError: code => console.warn('[webhook-outbox]', code),
+    deliver: (job, signal) => sendWebhook(job.url, job.body,
+      webhookHeaders({ id: job.event_id, version: job.version }, job.body),
+      setting('WEBHOOK_TIMEOUT_MS', 5000, 1000, 15000), signal)
+  });
+  reconcileWebhooks(webhooks);
+  outbox.start();
+}
+
+export function reconcileWebhooks(webhooks) {
+  outbox?.reconcile(webhooks.filter(h => h.enabled !== false).map(h => h.url));
+}
+export function webhookStatus() { return outbox?.snapshot() || { pending: 0, failed: 0, active: 0, rejected: 0, storageErrors: 0, paused: false }; }
+export function retryWebhooks() { return outbox?.retryFailed() || 0; }
+export async function closeWebhooks() { if (outbox) await outbox.close(); }
 
 export function webhookHeaders(event, body, secret = process.env.WEBHOOK_SIGNING_SECRET || '') {
   const headers = {
@@ -19,8 +50,6 @@ export function webhookHeaders(event, body, secret = process.env.WEBHOOK_SIGNING
   }
   return headers;
 }
-
-const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export function normalizeWebhooks(value) {
   if (!Array.isArray(value)) return [];
@@ -52,27 +81,8 @@ export async function dispatchWebhook(event, webhooks) {
   );
   if (!targets.length) return;
 
-  let body;
-  try { body = serializeEvent(event); } catch { return; }
-  await Promise.allSettled(targets.map(h => deliveryQueue.run(async () => {
-    const configuredRetries = Number(process.env.WEBHOOK_RETRIES ?? 3);
-    const configuredTimeout = Number(process.env.WEBHOOK_TIMEOUT_MS ?? 5000);
-    const retries = Number.isFinite(configuredRetries) ? Math.min(Math.max(Math.trunc(configuredRetries), 0), 5) : 3;
-    const timeoutMs = Number.isFinite(configuredTimeout) ? Math.min(Math.max(configuredTimeout, 1000), 15000) : 5000;
-
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        await sendWebhook(String(h.url), body, webhookHeaders(event, body), timeoutMs);
-        return;
-      } catch (e) {
-        if (attempt === retries) {
-          console.warn('[webhook]', new URL(h.url).hostname, e?.code || 'delivery failed');
-          return;
-        }
-        await wait(Math.min(1500 * 2 ** attempt, 6000));
-      }
-    }
-  }).then(accepted => {
-    if (!accepted) console.warn('[webhook] Queue penuh; event delivery dilewati.');
-  })));
+  if (!outbox) initializeWebhooks(webhooks);
+  const body = serializeEvent(event);
+  // Resolves after the durable commit, not after network delivery.
+  return outbox.enqueue(event, body, targets.map(h => h.url));
 }
