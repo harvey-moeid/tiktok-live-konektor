@@ -8,7 +8,7 @@ const validUsername = value => /^[A-Za-z0-9._-]{1,64}$/.test(value);
 // discovery or on a Business-only signing error.
 export function isNativeRoomDiscoveryError(error) {
   const message = String(error?.message || error || '');
-  return /failed to retrieve room id from all sources|room id live @.+ tidak dapat ditemukan otomatis|native room id discovery failed/i.test(message);
+  return /failed to retrieve room id from all sources|room id live @.+ tidak dapat ditemukan otomatis|native room id discovery failed|the requested user isn['’]t online/i.test(message);
 }
 const canTryManaged = error => isEulerBusinessPlanError(error) || isNativeRoomDiscoveryError(error);
 const permanentError = error => isEulerBusinessPlanError(error) || /API key .*tidak (?:diterima|valid)|tidak memiliki izin Cloud WebSocket|Konfigurasi Cloud WebSocket .*tidak valid/i.test(String(error?.message || error));
