@@ -190,7 +190,9 @@ export class ManagedLiveConnection {
           ? 'Gateway Eulerstream tidak berhasil membuka koneksi WebSocket.'
           : !framesReceived
             ? 'WebSocket Eulerstream terbuka tetapi tidak menerima pesan LIVE.'
-            : 'WebSocket Eulerstream menerima pesan, tetapi tidak menemukan status atau event LIVE yang valid.';
+            : kinds.size && [...kinds].every(kind => /^(workerInfo|tiktok[._]connect)$/i.test(kind))
+              ? 'Gateway Eulerstream hanya mengirim metadata workerInfo/tiktok.connect, bukan konfirmasi LIVE.'
+              : 'WebSocket Eulerstream menerima pesan, tetapi tidak menemukan status atau event LIVE yang valid.';
         console.warn('[managed-ws] Handshake diagnostic', JSON.stringify({
           opened: socketOpened, framesReceived, framesParsed, kinds: [...kinds]
         }));

@@ -3,6 +3,14 @@ import { isEulerBusinessPlanError } from './signing-error.js';
 import { redactText } from './diagnostics.js';
 
 const validUsername = value => /^[A-Za-z0-9._-]{1,64}$/.test(value);
+// Room ID discovery can fail on a cloud IP even while the broadcaster is LIVE.
+// Managed Cloud WebSocket resolves by username and must not depend on Node's
+// discovery or on a Business-only signing error.
+export function isNativeRoomDiscoveryError(error) {
+  const message = String(error?.message || error || '');
+  return /failed to retrieve room id from all sources|room id live @.+ tidak dapat ditemukan otomatis|native room id discovery failed|the requested user isn['’]t online/i.test(message);
+}
+const canTryManaged = error => isEulerBusinessPlanError(error) || isNativeRoomDiscoveryError(error);
 const permanentError = error => isEulerBusinessPlanError(error) || /API key .*tidak (?:diterima|valid)|tidak memiliki izin Cloud WebSocket|Konfigurasi Cloud WebSocket .*tidak valid/i.test(String(error?.message || error));
 
 // Owns the desired state, session boundaries, event ordering and retry policy.
@@ -23,6 +31,7 @@ export class LiveController {
     this.closed = false; this.timer = null; this.pending = []; this.connectedAt = null;
     this.seen = new Map();
     this.startedEngines = new Set();
+    this.nodeSignerBlocked = false;
   }
 
   snapshot() {
@@ -57,6 +66,8 @@ export class LiveController {
     // Persist before acknowledging intent; failed writes never change runtime state.
     this.persistDesired(desired);
     this.desired = desired; this.attempts = 0; this.exhausted = false;
+    // A new operator Start may follow an account upgrade; retry Node once.
+    this.nodeSignerBlocked = false;
     this.seen.clear();
     this.cancelRetry(); const generation = ++this.generation;
     this.publish('Connecting...');
@@ -81,7 +92,9 @@ export class LiveController {
       for (const name of choices) {
         const engine = this.engines[name];
         if (!engine || (name !== 'node' && !engine.enabled)) continue;
-        if (name === 'managed' && !isEulerBusinessPlanError(failure)) continue;
+        if (name === 'node' && this.nodeSignerBlocked &&
+            (this.engines.managed?.enabled || this.engines.python?.enabled)) continue;
+        if (name === 'managed' && !this.nodeSignerBlocked && !canTryManaged(failure)) continue;
         this.engine = name; this.pending = []; this.startFailure = null;
         this.publish('Connecting...');
         try {
@@ -104,6 +117,11 @@ export class LiveController {
           return this.snapshot();
         } catch (error) {
           failure = error;
+          if (name === 'node' && isEulerBusinessPlanError(error)) {
+            // Do not spend every reconnect attempt on an entitlement denied
+            // by Eulerstream. Fall back to the managed/bridge transport.
+            this.nodeSignerBlocked = true;
+          }
           await Promise.resolve().then(() => engine.stop()).catch(() => {});
           this.startedEngines.delete(name);
           if (!this.current(generation)) return this.snapshot();
