@@ -177,3 +177,15 @@ test('reconnect skips denied Business signer; a fresh manual Start can retry it'
   assert.equal(nativeStarts, 2, 'operator Start should recheck Node after a possible plan change');
   assert.equal(managedStarts, 3);
 });
+
+test('managed checks username when native reports a possibly stale offline Room ID', async () => {
+  const managed = {
+    enabled: true, start: async () => ({ roomId: '7698371791703100167' }),
+    stop: async () => {}, flushPendingEvents: () => {}
+  };
+  const h = harness({ engines: { managed } });
+  h.node.start = async () => { throw Error("The requested user isn't online :("); };
+  await h.live.start('genwangi');
+  assert.equal(h.live.snapshot().engine, 'managed');
+  assert.equal(h.live.snapshot().roomId, '7698371791703100167');
+});
