@@ -141,7 +141,9 @@ Logout mencabut sesi saat ini dan memutus socket terkait. Perubahan password men
 
 Start LIVE memakai Room ID manual jika diisi; jika kosong, connector mencoba resolver bawaan lalu probe HTML LIVE yang ketat. Room ID hanya membantu discovery, tidak menggantikan validasi room atau signing WebSocket. Extended gift info aktif; nama gift tetap bergantung pada metadata upstream. Event menyertakan `giftId` dan `giftName`; nama yang tidak tersedia menjadi `Gift #<id>` atau `Gift tidak dikenal`.
 
-Urutan koneksi: **Node → managed Cloud WebSocket pada error Business-plan → Python bila dikonfigurasi**. Status `engine` dapat berupa `node`, `managed`, `python`, atau `none`.
+Urutan koneksi: **Node → managed Cloud WebSocket jika Node gagal karena Business-plan atau discovery Room ID → Python bila dikonfigurasi**. Setelah signer Node ditolak karena paket Business, retry dalam sesi Start yang sama melewati Node dan langsung mencoba managed/Python untuk menghindari permintaan signer yang pasti gagal. Start baru menguji Node kembali (misalnya setelah upgrade plan). Status `engine` dapat berupa `node`, `managed`, `python`, atau `none`.
+
+Pesan awal managed `workerInfo` hanya membuktikan gateway WebSocket menjawab, **bukan** keberhasilan koneksi ke LIVE TikTok. Jika tidak ada `room.status`, `roomInfo`, atau event webcast sampai timeout, periksa status akun LIVE dan izin/kuota Cloud WebSocket. Room ID manual tidak membuka hak akses signing Eulerstream.
 
 Eulerstream Business signing dan managed Cloud WebSocket adalah layanan berbeda. Community key tidak memberikan akses Business signing. Gateway hanya berhasil jika key diterima, kuota/entitlement sesuai, dan broadcaster benar-benar LIVE. Room ID manual, restart, dan Python fallback tidak menjamin melewati pembatasan TikTok atau signer.
 
