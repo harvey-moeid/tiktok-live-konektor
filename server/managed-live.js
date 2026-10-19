@@ -112,6 +112,24 @@ export function managedCloseReason(code, reason = '') {
   return CLOSED.get(Number(code)) || String(reason || ('Koneksi Cloud WebSocket ditutup (kode ' + code + ')')).slice(0, 250);
 }
 
+// Log only non-sensitive connection metadata. Do not log WebSocket URL,
+// raw gateway payloads, close reason (provider-controlled), or API credentials.
+export function managedCloseDiagnostic(code, { liveConfirmed = false, framesReceived = 0, kinds = [] } = {}) {
+  const numeric = Number(code);
+  const safeCode = Number.isInteger(numeric) ? numeric : 0;
+  const category = new Map([
+    [4401, 'invalid_auth'], [4403, 'permission_denied'],
+    [4404, 'not_live'], [4429, 'too_many_connections'],
+    [4556, 'webcast_fetch_failed'], [4557, 'room_info_fetch_failed'],
+    [4005, 'stream_ended'], [4006, 'message_timeout']
+  ]).get(safeCode) || 'other';
+  return {
+    code: safeCode, category, liveConfirmed: Boolean(liveConfirmed),
+    framesReceived: Number.isSafeInteger(framesReceived) ? framesReceived : 0,
+    kinds: safeMessageKinds((Array.isArray(kinds) ? kinds : []).map(type => ({ type })))
+  };
+}
+
 export class ManagedLiveConnection {
   constructor({ apiKey = process.env.EULER_API_KEY, emitEvent = () => {}, setStatus = () => {},
     socketFactory = (url, options) => new WebSocket(url, options),
@@ -275,6 +293,10 @@ export class ManagedLiveConnection {
         const wasConnected = this.connected;
         this.active = false;
         this.connected = false;
+        const diagnostic = managedCloseDiagnostic(code, {
+          liveConfirmed: wasConnected, framesReceived, kinds: [...kinds]
+        });
+        console.warn('[managed-ws] Connection closed @' + clean, JSON.stringify(diagnostic));
         const msg = managedCloseReason(code, Buffer.isBuffer(rawReason) ? rawReason.toString('utf8') : rawReason);
         if (!settled) finish(Error(msg));
         else if (wasConnected) this.setStatus(code === 4005 || code === 1000 || code === 4404 ? 'Disconnected' : 'Error', msg);
