@@ -66,6 +66,9 @@ export class LiveController {
     // Persist before acknowledging intent; failed writes never change runtime state.
     this.persistDesired(desired);
     this.desired = desired; this.attempts = 0; this.exhausted = false;
+    console.info('[live] Operator Start', JSON.stringify({
+      username, roomIdMode: roomId ? 'manual' : 'auto'
+    }));
     // A new operator Start may follow an account upgrade; retry Node once.
     this.nodeSignerBlocked = false;
     this.seen.clear();
@@ -76,6 +79,9 @@ export class LiveController {
 
   resume() {
     if (this.closed || !this.desired.running) return this.operation;
+    console.info('[live] Restoring saved Start', JSON.stringify({
+      username: this.desired.username, roomIdMode: this.desired.roomId ? 'manual' : 'auto'
+    }));
     const generation = ++this.generation;
     this.publish('Connecting...');
     return this.enqueue(() => this.connect(generation, true));
@@ -95,6 +101,10 @@ export class LiveController {
         if (name === 'node' && this.nodeSignerBlocked &&
             (this.engines.managed?.enabled || this.engines.python?.enabled)) continue;
         if (name === 'managed' && !this.nodeSignerBlocked && !canTryManaged(failure)) continue;
+        console.info('[live] Engine attempt', JSON.stringify({
+          engine: name, username: this.desired.username, recovering, attempt: this.attempts,
+          nodeSignerBlocked: this.nodeSignerBlocked
+        }));
         this.engine = name; this.pending = []; this.startFailure = null;
         this.publish('Connecting...');
         try {
@@ -191,6 +201,9 @@ export class LiveController {
     }
     const delay = Math.min(this.maxDelayMs, this.baseDelayMs * 2 ** Math.min(this.attempts, 16) * (0.8 + this.random() * 0.4));
     this.attempts++; this.nextRetryAt = this.now() + Math.round(delay);
+    console.info('[live] Retry scheduled', JSON.stringify({
+      username: this.desired.username, attempt: this.attempts, delayMs: Math.round(delay)
+    }));
     const generation = this.generation;
     this.timer = this.setTimer(() => {
       this.timer = null; this.nextRetryAt = null;
