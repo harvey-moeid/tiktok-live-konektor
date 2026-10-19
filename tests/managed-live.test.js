@@ -141,7 +141,7 @@ test('tiktok.connect only proves gateway transport, not active LIVE', async () =
   const pending = instance.start('some_live');
   socket.emit('open');
   socket.emit('message', JSON.stringify({ type: 'tiktok.connect', data: { agentId: 'abc' } }));
-  await assert.rejects(pending, /tidak menemukan status atau event LIVE/);
+  await assert.rejects(pending, /bukan konfirmasi LIVE/);
 });
 
 test('timeout distinguishes a socket with no data from an unopened transport', async () => {
