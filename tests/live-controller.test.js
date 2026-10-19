@@ -139,3 +139,41 @@ test('late room metadata becomes visible to status consumers', async () => {
   h.live.onEngineEvent('node', { event: 'viewer', roomId: '123456789', data: { viewerCount: 5 } });
   assert.equal(h.live.snapshot().roomId, '123456789');
 });
+
+test('managed fallback is attempted when native Room ID discovery fails', async () => {
+  let managedStarts = 0;
+  const managed = {
+    enabled: true,
+    start: async () => { managedStarts++; return { roomId: '123456789012345' }; },
+    stop: async () => {}, flushPendingEvents: () => {}
+  };
+  const h = harness({ engines: { managed } });
+  h.node.start = async () => { throw Error('Failed to retrieve Room ID from all sources.'); };
+  await h.live.start('broadcaster');
+  assert.equal(managedStarts, 1);
+  assert.equal(h.live.snapshot().engine, 'managed');
+  assert.equal(h.live.snapshot().roomId, '123456789012345');
+});
+
+test('reconnect skips denied Business signer; a fresh manual Start can retry it', async () => {
+  const { EULER_BUSINESS_PLAN_MESSAGE } = await import('../server/signing-error.js');
+  let nativeStarts = 0, managedStarts = 0;
+  const managed = {
+    enabled: true,
+    start: async () => { managedStarts++; return { roomId: '123456789012345' }; },
+    stop: async () => {}, flushPendingEvents: () => {}
+  };
+  const h = harness({ engines: { managed } });
+  h.node.start = async () => { nativeStarts++; throw Error(EULER_BUSINESS_PLAN_MESSAGE); };
+  await h.live.start('broadcaster');
+  assert.equal(nativeStarts, 1);
+  assert.equal(managedStarts, 1);
+  h.live.onEngineStatus('managed', 'Error', 'temporary disconnection');
+  await h.retry();
+  assert.equal(nativeStarts, 1, 'retry must not hit the known Business-only signer again');
+  assert.equal(managedStarts, 2);
+  await h.live.stop();
+  await h.live.start('broadcaster');
+  assert.equal(nativeStarts, 2, 'operator Start should recheck Node after a possible plan change');
+  assert.equal(managedStarts, 3);
+});
