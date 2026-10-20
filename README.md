@@ -145,6 +145,8 @@ Urutan koneksi: **Node → managed Cloud WebSocket jika Node gagal karena Busine
 
 Pesan awal managed `workerInfo` hanya membuktikan gateway WebSocket menjawab, **bukan** keberhasilan koneksi ke LIVE TikTok. Jika tidak ada `room.status`, `roomInfo`, atau event webcast sampai timeout, periksa status akun LIVE dan izin/kuota Cloud WebSocket. Room ID manual tidak membuka hak akses signing Eulerstream.
 
+Diagnostik koneksi mencatat `[live] Operator Start`, `[live] Restoring saved Start`, `[live] Engine attempt` dan `[live] Retry scheduled` untuk membedakan pergantian akun manual, pemulihan setelah restart, serta retry otomatis. `[managed-ws] Connection closed` mencatat **kode WebSocket, kategori, jumlah frame, dan jenis frame** tanpa raw payload/URL/API key. Kode penting: `4401` auth gagal, `4403` izin ditolak, `4404` broadcaster tidak LIVE, `4429` kuota koneksi, `4556/4557` gagal mengambil webcast/room. `workerInfo` saja tidak membuktikan akses LIVE. Jika managed menolak izin, Python fallback juga mungkin membutuhkan hak akses signing dari provider (bukan bypass paket Business).
+
 Eulerstream Business signing dan managed Cloud WebSocket adalah layanan berbeda. Community key tidak memberikan akses Business signing. Gateway hanya berhasil jika key diterima, kuota/entitlement sesuai, dan broadcaster benar-benar LIVE. Room ID manual, restart, dan Python fallback tidak menjamin melewati pembatasan TikTok atau signer.
 
 ### Python opsional

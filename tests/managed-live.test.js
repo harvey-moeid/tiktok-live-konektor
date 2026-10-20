@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { ManagedLiveConnection, normalizeManagedMessage, extractManagedMessages, managedCloseReason } from '../server/managed-live.js';
+import { ManagedLiveConnection, normalizeManagedMessage, extractManagedMessages, managedCloseReason, managedCloseDiagnostic } from '../server/managed-live.js';
 
 const fake = () => {
   const socket = new EventEmitter();
@@ -174,4 +174,14 @@ test('workerInfo alone is only gateway metadata, not proof of LIVE', async () =>
   await assert.rejects(pending, /workerInfo.*bukan konfirmasi LIVE/);
   assert.equal(instance.connected, false);
   assert.equal(events.length, 0);
+});
+
+test('managed close diagnostics classify provider codes without exposing close reason or credentials', () => {
+  const data = managedCloseDiagnostic(4404, { liveConfirmed: false, framesReceived: 1, kinds: ['workerInfo'] });
+  assert.deepEqual(data, { code: 4404, category: 'not_live', liveConfirmed: false, framesReceived: 1, kinds: ['workerInfo'] });
+  assert.equal(managedCloseDiagnostic(4403).category, 'permission_denied');
+  assert.equal(managedCloseDiagnostic(4401).category, 'invalid_auth');
+  assert.equal(managedCloseDiagnostic(4429).category, 'too_many_connections');
+  assert.equal(managedCloseDiagnostic(4557).category, 'room_info_fetch_failed');
+  assert.deepEqual(managedCloseDiagnostic(1006, { kinds: ['workerInfo', 'unsafe key=secret'] }).kinds, ['workerInfo']);
 });
