@@ -126,6 +126,7 @@ live = new LiveController({
   autoReconnect: !/^(0|false|no|off)$/i.test(process.env.LIVE_AUTO_RECONNECT || ''),
   baseDelayMs: envNumber('LIVE_RECONNECT_BASE_MS', 2000, 500, 60_000),
   maxDelayMs: envNumber('LIVE_RECONNECT_MAX_MS', 60_000, 2000, 300_000),
+  recoveryIntervalMs: envNumber('LIVE_RECOVERY_INTERVAL_MS', 300_000, 0, 86_400_000),
   maxAttempts: envNumber('LIVE_RECONNECT_ATTEMPTS', 10, 0, 100),
   persistDesired: desired => updateConfig({ liveDesired: desired,
     ...(desired.running ? { tiktokUsername: desired.username, tiktokRoomId: desired.roomId } : {}) }),
@@ -142,7 +143,7 @@ app.get('/api/ready', (_, res) => {
   const delivery = webhookStatus();
   const session = live.snapshot();
   const ready = !shuttingDown && (!session.desiredRunning || session.status === 'Connected') &&
-    !delivery.paused && !delivery.failed && !delivery.rejected && !delivery.storageErrors;
+    !delivery.paused && !delivery.failed && !delivery.needsAttention;
   res.status(ready ? 200 : 503).json({ ok: ready, liveExpected: session.desiredRunning,
     liveConnected: session.status === 'Connected', recoveryExhausted: session.recoveryExhausted,
     webhookPending: delivery.pending, webhookFailed: delivery.failed });

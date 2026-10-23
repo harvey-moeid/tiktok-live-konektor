@@ -99,3 +99,28 @@ test('delivery concurrency is bounded while all pending jobs remain durable', as
   }
   await waitFor(() => box.snapshot().pending === 0); assert.equal(peak, 2);
 });
+
+test('explicit recovery acknowledges overflow without erasing loss counters and detects new incidents', async t => {
+  const make = await fixture(t, { capacity: 1 }); const box = make();
+  box.enqueue(event('first'), '{}', ['https://one.test']);
+  assert.throws(() => box.enqueue(event('lost'), '{}', ['https://one.test']), /penuh/);
+  box.start(); await waitFor(() => box.snapshot().pending === 0);
+  assert.equal(box.snapshot().needsAttention, true);
+  box.retryFailed();
+  assert.equal(box.snapshot().needsAttention, false);
+  assert.equal(box.snapshot().rejected, 1);
+  assert.throws(() => box.enqueue(event('lost-again'), '{}', ['https://one.test', 'https://two.test']), /penuh/);
+  assert.equal(box.snapshot().needsAttention, true);
+});
+
+test('storage recovery requires a successful write and preserves error history', async t => {
+  const make = await fixture(t); const box = make(); box.db.exec('PRAGMA query_only=ON');
+  assert.throws(() => box.enqueue(event('lost'), '{}', ['https://one.test']));
+  assert.throws(() => box.retryFailed());
+  assert.equal(box.snapshot().needsAttention, true);
+  box.db.exec('PRAGMA query_only=OFF'); box.retryFailed();
+  assert.equal(box.snapshot().needsAttention, false);
+  assert.equal(box.snapshot().storageErrors, 1);
+  box.enqueue(event('recovered'), '{}', ['https://one.test']);
+  await waitFor(() => box.snapshot().pending === 0);
+});
