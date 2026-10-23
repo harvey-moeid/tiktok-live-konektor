@@ -14,6 +14,7 @@ export class WebhookOutbox {
     this.active = new Map(); this.closing = false; this.timer = null;
     this.rejected = 0; this.storageErrors = 0; this.lastError = null; this.started = false;
     this.allowedUrls = null;
+    this.acknowledgedRejected = 0; this.acknowledgedStorageErrors = 0;
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(file);
     fs.chmodSync(file, 0o600);
@@ -145,6 +146,9 @@ export class WebhookOutbox {
   retryFailed() {
     if (this.closing) throw Error('Webhook outbox sedang ditutup.');
     const result = this.db.prepare("UPDATE deliveries SET state='pending', attempts=0, next_at=?, last_error=NULL WHERE state='failed'").run(this.now());
+    // The successful write above verifies storage before acknowledging the incident.
+    this.acknowledgedRejected = this.rejected;
+    this.acknowledgedStorageErrors = this.storageErrors;
     this.lastError = null; this.started = true; this.drain();
     return result.changes;
   }
@@ -156,6 +160,7 @@ export class WebhookOutbox {
       bytes: this.bytes, capacity: this.capacity, maxBytes: this.maxBytes,
       oldestPendingAt: pending.oldest ? new Date(pending.oldest).toISOString() : null,
       rejected: this.rejected, storageErrors: this.storageErrors, lastError: this.lastError,
+      needsAttention: this.rejected > this.acknowledgedRejected || this.storageErrors > this.acknowledgedStorageErrors,
       paused: !this.started && !this.closing };
   }
 

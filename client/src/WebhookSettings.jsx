@@ -31,12 +31,12 @@ function DeliveryStatus({ active }) {
     <div><strong>Status pengiriman</strong>
       <p role="status">{delivery ? `${delivery.pending} menunggu · ${delivery.failed} gagal` : 'Memuat status pengiriman…'}</p>
       {!!delivery?.failed && <small>Pengiriman gagal tetap disimpan. Periksa penerima, lalu coba ulang.</small>}
-      {!!(delivery?.storageErrors || delivery?.rejected || delivery?.paused) &&
-        <p role="alert">Pengiriman memerlukan pemeriksaan server: antrean penuh atau penyimpanan bermasalah.</p>}
+      {!!(delivery?.needsAttention || delivery?.paused) &&
+        <p role="alert">Periksa antrean dan penyimpanan, lalu pulihkan pengiriman. Event yang ditolak belum tersimpan dan tidak dapat dikirim ulang.</p>}
       {error && <p role="alert">Status pengiriman tidak dapat dimuat: {error}</p>}
     </div>
-    {!!delivery?.failed && <button className="secondary" type="button" disabled={retrying} onClick={retry}>
-      {retrying ? 'Memproses…' : 'Coba ulang pengiriman gagal'}
+    {!!(delivery?.failed || delivery?.needsAttention || delivery?.paused) && <button className="secondary" type="button" disabled={retrying} onClick={retry}>
+      {retrying ? 'Memproses…' : 'Pulihkan dan coba ulang pengiriman'}
     </button>}
   </div>;
 }

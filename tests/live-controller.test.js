@@ -73,7 +73,7 @@ test('restart resumes persisted intent; graceful shutdown does not persist Stop'
 });
 
 test('failed attempts are bounded and storage failure never changes desired state', async () => {
-  const h = harness({ maxAttempts: 2 });
+  const h = harness({ maxAttempts: 2, recoveryIntervalMs: 0 });
   h.node.start = async () => { throw Error('network unavailable'); };
   await assert.rejects(h.live.start('broadcaster'), /network/);
   await h.retry(); await h.retry();
@@ -188,4 +188,39 @@ test('managed checks username when native reports a possibly stale offline Room 
   await h.live.start('genwangi');
   assert.equal(h.live.snapshot().engine, 'managed');
   assert.equal(h.live.snapshot().roomId, '7698371791703100167');
+});
+
+test('slow recovery continues after fast retries and successful connection restores the retry budget', async () => {
+  const h = harness({ maxAttempts: 1, recoveryIntervalMs: 300_000 });
+  h.node.start = async () => { throw Error('offline'); };
+  await assert.rejects(h.live.start('broadcaster'), /offline/);
+  await h.retry();
+  assert.equal(h.live.snapshot().recoveryExhausted, true);
+  assert.equal(h.timers.at(-1).delay, 300_000);
+  await h.retry();
+  assert.equal(h.timers.at(-1).delay, 300_000);
+  h.node.start = async () => ({ roomId: '123456789' }); await h.retry();
+  assert.equal(h.live.snapshot().status, 'Connected');
+  assert.equal(h.live.snapshot().recoveryExhausted, false);
+  assert.equal(h.live.snapshot().reconnectAttempts, 0);
+  h.live.onEngineStatus('node', 'Disconnected', 'network');
+  assert.equal(h.timers.at(-1).delay, 2000);
+});
+
+test('Stop and shutdown cancel slow recovery; disabled reconnect and permanent errors never schedule it', async () => {
+  for (const shutdown of [false, true]) {
+    const h = harness({ maxAttempts: 0 });
+    h.node.start = async () => { throw Error('offline'); };
+    await assert.rejects(h.live.start('broadcaster'));
+    const timer = h.timers.at(-1); assert.equal(timer.delay, 300_000);
+    await h.live.stop({ shutdown }); assert.equal(timer.cancelled, true);
+    timer.fn(); await h.live.operation;
+    assert.equal(h.live.snapshot().status, 'Disconnected');
+  }
+  for (const options of [{ autoReconnect: false }, {}]) {
+    const h = harness(options);
+    h.node.start = async () => { throw Error('API key Cloud WebSocket Eulerstream tidak diterima.'); };
+    await assert.rejects(h.live.start('broadcaster'));
+    assert.equal(h.timers.length, 0);
+  }
 });

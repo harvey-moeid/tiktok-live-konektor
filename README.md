@@ -58,7 +58,7 @@ Dependency build tetap diperlukan: `.npmrc` menyertakan `include=dev`. `package-
 | `EULER_API_KEY` | Key Eulerstream di server; akses signer/gateway mengikuti entitlement akun |
 | `CONFIG_FILE` | Default `./data/config.json`; tempat konfigurasi, hash password dan pencabutan sesi; gunakan storage persisten |
 | `TRUST_PROXY` | Jumlah hop proxy tepercaya, `0–10`; default produksi `1`, development `0`; Render memakai `1` |
-| `LIVE_AUTO_RECONNECT` | Default `true`; retry koneksi yang terputus dengan backoff/jitter, maksimum `LIVE_RECONNECT_ATTEMPTS` (default 10) |
+| `LIVE_AUTO_RECONNECT` | Default `true`; retry koneksi yang terputus dengan backoff/jitter, maksimum `LIVE_RECONNECT_ATTEMPTS` retry cepat (default 10), lalu retry berkala sesuai `LIVE_RECOVERY_INTERVAL_MS` (default 300000 ms; 0 untuk berhenti) |
 | `WEBHOOK_OUTBOX_FILE` | Default `webhook-outbox.sqlite` di direktori `CONFIG_FILE`; simpan di disk persisten |
 | `WEBHOOK_QUEUE_CAPACITY` | Maksimum job pending + gagal; default `10000` |
 | `WEBHOOK_QUEUE_MAX_BYTES` | Batas payload antrean termasuk overhead logis; default 100 MiB |
@@ -83,7 +83,7 @@ Jalankan **satu instance Node**. Statistik, rate limit, history, dan socket sess
 
 Backup konfigurasi dan database outbox secara aman. Keduanya berisi data sensitif. Gunakan backup SQLite yang konsisten atau hentikan service sebelum menyalin database; jangan menyalin file utama SQLite saja ketika WAL masih aktif. Blueprint menyimpan keduanya di `/var/data` tanpa perubahan mount tambahan.
 
-`GET /api/health` mengukur liveness proses dan tetap cocok untuk health check hosting. `GET /api/ready` mengembalikan 503 jika LIVE yang diharapkan belum Connected, retry habis, atau delivery mengalami kegagalan/storage error/overflow. Saat admin sengaja menghentikan LIVE dan delivery sehat, readiness kembali 200. Monitor readiness dengan alert; jangan menjadikannya pemicu restart otomatis ketika broadcaster offline.
+`GET /api/health` mengukur liveness proses dan tetap cocok untuk health check hosting. `GET /api/ready` mengembalikan 503 jika LIVE yang diharapkan belum Connected, retry habis, atau delivery mengalami kegagalan/storage error/overflow. Setelah antrean penuh atau storage error, periksa penyebab lalu gunakan **Pulihkan dan coba ulang pengiriman** di dashboard. Pemulihan memverifikasi akses tulis SQLite dan mengakui insiden; penghitung historis tetap tersedia. Event yang ditolak belum tersimpan dan tidak dapat dipulihkan melalui retry. Saat admin sengaja menghentikan LIVE dan delivery sehat, readiness kembali 200. Monitor readiness dengan alert; jangan menjadikannya pemicu restart otomatis ketika broadcaster offline.
 
 ## Integrasi cepat dari website lain
 
@@ -158,7 +158,7 @@ Pada Node, isi:
 - `PYTHON_FALLBACK_URL`: origin HTTPS publik Python, tanpa path/query/credential; atau `PYTHON_FALLBACK_HOSTNAME` berupa hostname saja.
 - `PYTHON_FALLBACK_TOKEN`: nilai yang sama dengan `PYTHON_BRIDGE_TOKEN` di Python, minimal 32 karakter.
 
-Blueprint terpisah **tidak otomatis menghubungkan** URL/token. Python `/health` publik; `/start`, `/stop`, `/events` memakai bearer bridge token. Node melakukan polling otomatis setelah fallback berhasil. Python meresolve username sendiri, memiliki buffer maksimal 2000 event dan membaca maksimal 200 per polling; overload dapat kehilangan data. Node menguras seluruh batch terakhir sebelum menutup sesi, mendeteksi perubahan identitas sesi bridge, dan mengikuti kebijakan recovery yang sama. Setelah retry habis, gunakan Stop lalu Start dari dashboard untuk mencoba kembali.
+Blueprint terpisah **tidak otomatis menghubungkan** URL/token. Python `/health` publik; `/start`, `/stop`, `/events` memakai bearer bridge token. Node melakukan polling otomatis setelah fallback berhasil. Python meresolve username sendiri, memiliki buffer maksimal 2000 event dan membaca maksimal 200 per polling; overload dapat kehilangan data. Node menguras seluruh batch terakhir sebelum menutup sesi, mendeteksi perubahan identitas sesi bridge, dan mengikuti kebijakan recovery yang sama. Setelah retry cepat habis, konektor mencoba kembali setiap lima menit (minimal interval aktif satu menit). Atur `LIVE_RECOVERY_INTERVAL_MS=0` untuk berhenti setelah batas retry. Kesalahan izin permanen tetap menghentikan retry; perbaiki konfigurasi lalu gunakan Stop dan Start. Stop eksplisit membatalkan seluruh jadwal pemulihan.
 
 Manual startup Python dari root repositori:
 

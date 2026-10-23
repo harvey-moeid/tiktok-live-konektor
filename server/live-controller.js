@@ -17,9 +17,9 @@ const permanentError = error => isEulerBusinessPlanError(error) || /API key .*ti
 // Engines only own their transports. All operations use one serialized queue.
 export class LiveController {
   constructor({ engines, emitEvent, onStatus = () => {}, persistDesired = () => {}, desired = {},
-    autoReconnect = true, baseDelayMs = 2000, maxDelayMs = 60_000, maxAttempts = 10,
+    autoReconnect = true, recoveryIntervalMs = 300_000, baseDelayMs = 2000, maxDelayMs = 60_000, maxAttempts = 10,
     now = Date.now, random = Math.random, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
-    Object.assign(this, { engines, emitEvent, onStatus, persistDesired, autoReconnect,
+    Object.assign(this, { engines, emitEvent, onStatus, persistDesired, autoReconnect, recoveryIntervalMs,
       baseDelayMs, maxDelayMs, maxAttempts, now, random, setTimer, clearTimer });
     desired = desired && typeof desired === 'object' && !Array.isArray(desired) ? desired : {};
     this.desired = desired.running === true && validUsername(String(desired.username || '')) &&
@@ -123,6 +123,8 @@ export class LiveController {
           const pending = this.pending.splice(0);
           for (const event of pending) this.deliver(event);
           engine.flushPendingEvents?.();
+          if (this.exhausted) this.attempts = 0;
+          this.exhausted = false;
           this.publish('Connected');
           return this.snapshot();
         } catch (error) {
@@ -196,11 +198,15 @@ export class LiveController {
 
   scheduleRetry(error) {
     if (this.closed || !this.desired.running || this.timer) return;
-    if (!this.autoReconnect || this.attempts >= this.maxAttempts || permanentError(error)) {
+    if (!this.autoReconnect || permanentError(error) ||
+        (this.attempts >= this.maxAttempts && !this.recoveryIntervalMs)) {
       this.exhausted = true; this.publish(this.status, error); return;
     }
-    const delay = Math.min(this.maxDelayMs, this.baseDelayMs * 2 ** Math.min(this.attempts, 16) * (0.8 + this.random() * 0.4));
-    this.attempts++; this.nextRetryAt = this.now() + Math.round(delay);
+    const slowRecovery = this.attempts >= this.maxAttempts;
+    this.exhausted = slowRecovery;
+    const delay = slowRecovery ? Math.max(60_000, this.recoveryIntervalMs) : Math.min(this.maxDelayMs, this.baseDelayMs * 2 ** Math.min(this.attempts, 16) * (0.8 + this.random() * 0.4));
+    if (!slowRecovery) this.attempts++;
+    this.nextRetryAt = this.now() + Math.round(delay);
     console.info('[live] Retry scheduled', JSON.stringify({
       username: this.desired.username, attempt: this.attempts, delayMs: Math.round(delay)
     }));
