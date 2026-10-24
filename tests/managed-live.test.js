@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { ManagedLiveConnection, normalizeManagedMessage, extractManagedMessages, managedCloseReason } from '../server/managed-live.js';
+import { ManagedLiveConnection, normalizeManagedMessage, extractManagedMessages, managedCloseReason, createManagedWebSocketUrl } from '../server/managed-live.js';
 
 const fake = () => {
   const socket = new EventEmitter();
@@ -21,6 +21,35 @@ function bridge(socket, opts = {}) {
   });
   return { instance, events, statuses, calls };
 }
+
+test('default managed transport preserves Community URL and safely encodes credentials', async () => {
+  const socket = fake();
+  const apiKey = 'test-key+with&reserved=characters?#';
+  const { instance, calls } = bridge(socket, { apiKey, urlFactory: undefined });
+  const pending = instance.start('@some_live');
+  socket.emit('message', JSON.stringify({ type: 'room.status', data: { state: 'connected' } }));
+  await pending;
+  const url = new URL(calls[0].url);
+  assert.equal(url.origin, 'wss://ws.eulerstream.com');
+  assert.equal(url.searchParams.get('uniqueId'), '@some_live');
+  assert.equal(url.searchParams.get('apiKey'), apiKey);
+  assert.equal(url.hash, '');
+  assert.equal(url.searchParams.get('features.bundleEvents'), 'true');
+  assert.equal(url.searchParams.get('features.rawMessages'), 'false');
+  assert.equal(url.searchParams.get('features.schemaVersion'), 'v2');
+  assert.equal(url.searchParams.has('features.useEnterpriseApi'), false);
+  await instance.stop();
+});
+
+test('managed gateway override preserves its path and existing query parameters', () => {
+  const url = new URL(createManagedWebSocketUrl({
+    uniqueId: '@some_live', apiKey: 'community-key', features: { bundleEvents: true }
+  }, 'wss://gateway.example.test/live?region=test'));
+  assert.equal(url.origin, 'wss://gateway.example.test');
+  assert.equal(url.pathname, '/live');
+  assert.equal(url.searchParams.get('region'), 'test');
+  assert.equal(url.searchParams.get('apiKey'), 'community-key');
+});
 test('normalizes managed Webcast events to existing overlay/webhook contract', () => {
   const user = { uniqueId: 'visitor', nickname: 'Viewer' };
   const chat = normalizeManagedMessage('WebcastChatMessage', { user, comment: 'halo' });

@@ -12,7 +12,6 @@
     "test:browser": "node scripts/browser-smoke.mjs"
   },
   "dependencies": {
-    "@eulerstream/euler-websocket-sdk": "^1.0.0",
     "@vitejs/plugin-react": "^5.0.4",
     "bcryptjs": "^3.0.2",
     "cookie-parser": "^1.4.7",
@@ -39,7 +38,8 @@
   },
   "overrides": {
     "ws": "^8.21.1",
-    "body-parser": "^2.3.0",
+    "body-parser": "^2.4.0",
+    "ip-address": "^10.7.4",
     "qs": "^6.16.0"
   }
 }

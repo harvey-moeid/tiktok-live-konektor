@@ -1,9 +1,22 @@
 import WebSocket from 'ws';
-import { createWebSocketUrl } from '@eulerstream/euler-websocket-sdk';
 import { createEvent } from './events.js';
 import { normalizeGiftData } from './gifts.js';
 
 const STREAM_TYPES = new Set(['chat', 'like', 'gift', 'follow', 'share', 'member', 'viewer']);
+
+// Only URL construction is needed: receive/decode JSON with the existing ws client.
+// Keep the Community gateway and its query contract without loading SDK schemas.
+export function createManagedWebSocketUrl({ uniqueId, apiKey, features },
+  baseUrl = process.env.EULER_WS_URL || 'wss://ws.eulerstream.com') {
+  const url = new URL(baseUrl);
+  url.searchParams.set('uniqueId', uniqueId);
+  url.searchParams.set('apiKey', apiKey);
+  for (const [name, value] of Object.entries(features || {})) {
+    if (value !== undefined) url.searchParams.set('features.' + name, String(value));
+  }
+  return url.toString();
+}
+
 const pick = (...v) => v.find(x => x !== undefined && x !== null && String(x).trim() !== '');
 const count = (...v) => {
   for (const n of v) if (n !== undefined && n !== null && n !== '' && Number.isFinite(Number(n))) return Number(n);
@@ -115,7 +128,7 @@ export function managedCloseReason(code, reason = '') {
 export class ManagedLiveConnection {
   constructor({ apiKey = process.env.EULER_API_KEY, emitEvent = () => {}, setStatus = () => {},
     socketFactory = (url, options) => new WebSocket(url, options),
-    urlFactory = createWebSocketUrl, timeoutMs = 35000 } = {}) {
+    urlFactory = createManagedWebSocketUrl, timeoutMs = 35000 } = {}) {
     this.apiKey = String(apiKey || '').trim();
     this.emitEvent = emitEvent;
     this.setStatus = setStatus;
