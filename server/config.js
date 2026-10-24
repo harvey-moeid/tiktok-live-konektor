@@ -38,7 +38,7 @@ export function updateConfig(patch) {
   const temporary = filePath + '.' + crypto.randomUUID() + '.tmp';
   try {
     fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(temporary, JSON.stringify(next, null, 2), { mode: 0o600, flush: true });
+    fs.writeFileSync(temporary, JSON.stringify(next, null, 2), { mode: 0o600 });
     fs.renameSync(temporary, filePath);
   } catch (e) {
     try { fs.unlinkSync(temporary); } catch {}

@@ -6,7 +6,6 @@ Website konsumen terhubung ke layanan ini melalui **backend website → REST API
 
 - [Panduan integrasi website: konfigurasi, REST, Worker, WebSocket, webhook](docs/INTEGRASI_WEBSITE.md)
 - [Laporan audit dan persyaratan deployment produksi](docs/PRODUCTION_AUDIT.md)
-- [Perbaikan audit 18 Oktober: recovery, outbox, dan hasil verifikasi](docs/PRODUCTION_HARDENING_2026-10-18.md)
 - [Blueprint Node](render.yaml) dan [Blueprint Python opsional](render-python.yaml)
 
 ## Menjalankan secara lokal
@@ -58,10 +57,6 @@ Dependency build tetap diperlukan: `.npmrc` menyertakan `include=dev`. `package-
 | `EULER_API_KEY` | Key Eulerstream di server; akses signer/gateway mengikuti entitlement akun |
 | `CONFIG_FILE` | Default `./data/config.json`; tempat konfigurasi, hash password dan pencabutan sesi; gunakan storage persisten |
 | `TRUST_PROXY` | Jumlah hop proxy tepercaya, `0–10`; default produksi `1`, development `0`; Render memakai `1` |
-| `LIVE_AUTO_RECONNECT` | Default `true`; retry koneksi yang terputus dengan backoff/jitter, maksimum `LIVE_RECONNECT_ATTEMPTS` retry cepat (default 10), lalu retry berkala sesuai `LIVE_RECOVERY_INTERVAL_MS` (default 300000 ms; 0 untuk berhenti) |
-| `WEBHOOK_OUTBOX_FILE` | Default `webhook-outbox.sqlite` di direktori `CONFIG_FILE`; simpan di disk persisten |
-| `WEBHOOK_QUEUE_CAPACITY` | Maksimum job pending + gagal; default `10000` |
-| `WEBHOOK_QUEUE_MAX_BYTES` | Batas payload antrean termasuk overhead logis; default 100 MiB |
 
 Gunakan secret yang berbeda untuk JWT, WS, API dan webhook. Kode menolak JWT/WS/API yang identik dan placeholder JWT/WS/API; jangan mengandalkan pemeriksaan panjang sebagai pengganti secret acak. Contoh membuat **satu** secret untuk disimpan secara aman di pengaturan hosting:
 
@@ -79,18 +74,13 @@ Ulangi untuk setiap secret. Jangan menempelkan secret ke issue, log, frontend, a
 4. Gunakan domain HTTPS publik service. Login dashboard, kemudian klik **Start LIVE** saat penyiar sedang siaran.
 5. Verifikasi `status: Connected` dan event nyata pada [panduan integrasi](docs/INTEGRASI_WEBSITE.md). Health sukses hanya membuktikan proses tersedia.
 
-Jalankan **satu instance Node**. Statistik, rate limit, history, dan socket session tracking berada dalam memori proses. Intent Start/Stop disimpan di konfigurasi: restart melanjutkan LIVE yang sebelumnya dimulai; Stop eksplisit membatalkan recovery dan menonaktifkan pelanjutan tersebut. Startup pertama tetap menunggu Start dari admin. Environment username/Room ID yang tidak kosong dan `WS_TOKEN` diprioritaskan saat memuat konfigurasi; recovery memakai akun pada intent Start terakhir. Restart menghapus history/statistik, sedangkan reconnect ke Room ID yang sama mempertahankan statistik sesi di proses yang sama.
-
-Backup konfigurasi dan database outbox secara aman. Keduanya berisi data sensitif. Gunakan backup SQLite yang konsisten atau hentikan service sebelum menyalin database; jangan menyalin file utama SQLite saja ketika WAL masih aktif. Blueprint menyimpan keduanya di `/var/data` tanpa perubahan mount tambahan.
-
-`GET /api/health` mengukur liveness proses dan tetap cocok untuk health check hosting. `GET /api/ready` mengembalikan 503 jika LIVE yang diharapkan belum Connected, retry habis, atau delivery mengalami kegagalan/storage error/overflow. Setelah antrean penuh atau storage error, periksa penyebab lalu gunakan **Pulihkan dan coba ulang pengiriman** di dashboard. Pemulihan memverifikasi akses tulis SQLite dan mengakui insiden; penghitung historis tetap tersedia. Event yang ditolak belum tersimpan dan tidak dapat dipulihkan melalui retry. Saat admin sengaja menghentikan LIVE dan delivery sehat, readiness kembali 200. Monitor readiness dengan alert; jangan menjadikannya pemicu restart otomatis ketika broadcaster offline.
+Jalankan **satu instance Node**. LIVE state, rate limit, history, dan socket session tracking berada dalam memori proses. Backup file konfigurasi secara aman; file itu berisi data sensitif. Environment username/Room ID yang tidak kosong dan `WS_TOKEN` diprioritaskan saat startup. Restart menghapus history dan statistik LIVE.
 
 ## Integrasi cepat dari website lain
 
 | Kebutuhan | Endpoint/metode | Autentikasi |
 | --- | --- | --- |
 | Memeriksa proses | `GET /api/health` | Publik |
-| Memeriksa kesiapan ingest/delivery | `GET /api/ready` | Publik |
 | Status dan statistik | `GET /api/v1/status`, `GET /api/v1/stats` | `Authorization: Bearer <API_KEY>` atau `X-API-Key` |
 | History terbaru | `GET /api/v1/events?type=chat,like,gift&limit=20` | API key |
 | Event realtime | `wss://<domain-konektor>/live?events=chat,like,gift` | Header Bearer API key atau WS token dari backend |
@@ -125,9 +115,7 @@ Pada dashboard **Integrasi Webhook**, tambah maksimal 20 tujuan HTTPS publik, pi
 
 Webhook produksi memerlukan `WEBHOOK_SIGNING_SECRET`. Header signature adalah `sha256=<hex HMAC-SHA256>` atas **timestamp + `.` + raw body**. Receiver harus memverifikasi signature, toleransi waktu, dan deduplikasi `event.id`. [Panduan lengkap receiver](docs/INTEGRASI_WEBSITE.md#6-webhook-dengan-verifikasi-hmac) menjelaskan cara pemasangan sebelum middleware JSON.
 
-URL IP literal, private/local DNS, kredensial URL, fragment, duplikat URL dan redirect ditolak. Alamat DNS publik dipin untuk koneksi TLS. Job dikomit ke outbox SQLite sebelum dikirim, dengan empat delivery aktif, maksimal 10.000 job atau 100 MiB payload antrean secara default. Timeout default 5 detik; retry default tiga setelah percobaan pertama. Job pending dilanjutkan setelah restart, job gagal tetap tersimpan dan dapat dicoba ulang dari **Status pengiriman** di dashboard. Menonaktifkan/menghapus destinasi membatalkan backlog destinasi tersebut.
-
-Delivery bersifat **at-least-once untuk job yang berhasil dikomit**; crash setelah penerima memproses tetapi sebelum ack tersimpan dapat mengulang ID/body yang sama. Consumer harus melakukan deduplikasi durable. Antrean penuh/storage gagal menolak enqueue secara eksplisit, menulis ID event ke log, dan menurunkan readiness; event yang ditolak belum tersimpan untuk replay. Outbox tidak dapat memulihkan event yang tidak pernah diterima dari TikTok. Jangan menganggapnya jaminan exactly-once atau bukti transaksi finansial.
+URL IP literal, private/local DNS, kredensial URL, fragment, duplikat URL dan redirect ditolak. Alamat DNS publik dipin untuk koneksi TLS. Delivery dibatasi empat job aktif dan 200 menunggu; overflow dicatat dan dilewati. Timeout default 5 detik; retry default tiga setelah percobaan pertama. Delivery bersifat best-effort dan antrean tidak persisten.
 
 Riwayat aktivitas dapat dihapus oleh admin:
 
@@ -141,11 +129,7 @@ Logout mencabut sesi saat ini dan memutus socket terkait. Perubahan password men
 
 Start LIVE memakai Room ID manual jika diisi; jika kosong, connector mencoba resolver bawaan lalu probe HTML LIVE yang ketat. Room ID hanya membantu discovery, tidak menggantikan validasi room atau signing WebSocket. Extended gift info aktif; nama gift tetap bergantung pada metadata upstream. Event menyertakan `giftId` dan `giftName`; nama yang tidak tersedia menjadi `Gift #<id>` atau `Gift tidak dikenal`.
 
-Urutan koneksi: **Node → managed Cloud WebSocket jika Node gagal karena Business-plan atau discovery Room ID → Python bila dikonfigurasi**. Setelah signer Node ditolak karena paket Business, retry dalam sesi Start yang sama melewati Node dan langsung mencoba managed/Python untuk menghindari permintaan signer yang pasti gagal. Start baru menguji Node kembali (misalnya setelah upgrade plan). Status `engine` dapat berupa `node`, `managed`, `python`, atau `none`.
-
-Pesan awal managed `workerInfo` hanya membuktikan gateway WebSocket menjawab, **bukan** keberhasilan koneksi ke LIVE TikTok. Jika tidak ada `room.status`, `roomInfo`, atau event webcast sampai timeout, periksa status akun LIVE dan izin/kuota Cloud WebSocket. Room ID manual tidak membuka hak akses signing Eulerstream.
-
-Diagnostik koneksi mencatat `[live] Operator Start`, `[live] Restoring saved Start`, `[live] Engine attempt` dan `[live] Retry scheduled` untuk membedakan pergantian akun manual, pemulihan setelah restart, serta retry otomatis. `[managed-ws] Connection closed` mencatat **kode WebSocket, kategori, jumlah frame, dan jenis frame** tanpa raw payload/URL/API key. Kode penting: `4401` auth gagal, `4403` izin ditolak, `4404` broadcaster tidak LIVE, `4429` kuota koneksi, `4556/4557` gagal mengambil webcast/room. `workerInfo` saja tidak membuktikan akses LIVE. Jika managed menolak izin, Python fallback juga mungkin membutuhkan hak akses signing dari provider (bukan bypass paket Business).
+Urutan koneksi: **Node → managed Cloud WebSocket pada error Business-plan → Python bila dikonfigurasi**. Status `engine` dapat berupa `node`, `managed`, `python`, atau `none`.
 
 Eulerstream Business signing dan managed Cloud WebSocket adalah layanan berbeda. Community key tidak memberikan akses Business signing. Gateway hanya berhasil jika key diterima, kuota/entitlement sesuai, dan broadcaster benar-benar LIVE. Room ID manual, restart, dan Python fallback tidak menjamin melewati pembatasan TikTok atau signer.
 
@@ -158,7 +142,7 @@ Pada Node, isi:
 - `PYTHON_FALLBACK_URL`: origin HTTPS publik Python, tanpa path/query/credential; atau `PYTHON_FALLBACK_HOSTNAME` berupa hostname saja.
 - `PYTHON_FALLBACK_TOKEN`: nilai yang sama dengan `PYTHON_BRIDGE_TOKEN` di Python, minimal 32 karakter.
 
-Blueprint terpisah **tidak otomatis menghubungkan** URL/token. Python `/health` publik; `/start`, `/stop`, `/events` memakai bearer bridge token. Node melakukan polling otomatis setelah fallback berhasil. Python meresolve username sendiri, memiliki buffer maksimal 2000 event dan membaca maksimal 200 per polling; overload dapat kehilangan data. Node menguras seluruh batch terakhir sebelum menutup sesi, mendeteksi perubahan identitas sesi bridge, dan mengikuti kebijakan recovery yang sama. Setelah retry cepat habis, konektor mencoba kembali setiap lima menit (minimal interval aktif satu menit). Atur `LIVE_RECOVERY_INTERVAL_MS=0` untuk berhenti setelah batas retry. Kesalahan izin permanen tetap menghentikan retry; perbaiki konfigurasi lalu gunakan Stop dan Start. Stop eksplisit membatalkan seluruh jadwal pemulihan.
+Blueprint terpisah **tidak otomatis menghubungkan** URL/token. Python `/health` publik; `/start`, `/stop`, `/events` memakai bearer bridge token. Node melakukan polling otomatis setelah fallback berhasil. Python meresolve username sendiri, memiliki buffer maksimal 2000 event dan membaca maksimal 200 per polling; overload dapat kehilangan data. Setelah LIVE berakhir, mulai lagi dari dashboard bila diperlukan.
 
 Manual startup Python dari root repositori:
 

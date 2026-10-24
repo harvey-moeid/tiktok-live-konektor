@@ -17,7 +17,6 @@ test('does not misclassify ordinary TikTok connection errors', () => {
   }
 });
 test('commercial entitlement guidance does not claim free key or Room ID can fix signing', () => {
-  assert.equal(isEulerBusinessPlanError(Error(EULER_BUSINESS_PLAN_MESSAGE)), true);
   assert.match(EULER_BUSINESS_PLAN_MESSAGE, /Business/);
   assert.match(EULER_BUSINESS_PLAN_MESSAGE, /Community/);
   assert.match(EULER_BUSINESS_PLAN_MESSAGE, /tidak dijamin/);

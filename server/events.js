@@ -3,15 +3,6 @@ import crypto from 'node:crypto';
 const DEFAULT_MAX_SERIALIZED_BYTES = 64 * 1024;
 const HARD_MAX_SERIALIZED_BYTES = 256 * 1024;
 
-export function sourceMessageId(...values) {
-  for (const value of values) {
-    if (!['string', 'number', 'bigint'].includes(typeof value)) continue;
-    const id = String(value).trim();
-    if (id && !/^0+$/.test(id)) return id;
-  }
-  return null;
-}
-
 function maxSerializedBytes() {
   const configured = Number(process.env.MAX_EVENT_BYTES || DEFAULT_MAX_SERIALIZED_BYTES);
   if (!Number.isFinite(configured)) return DEFAULT_MAX_SERIALIZED_BYTES;
@@ -66,9 +57,8 @@ export function normalizeEvent(event) {
 }
 
 export function createEvent(type, data, meta = {}) {
-  const sourceId = meta.sourceId && String(meta.sourceId) !== '0' ? String(meta.sourceId).slice(0, 256) : null;
   return {
-    id: sourceId ? crypto.createHash('sha256').update(JSON.stringify([meta.username, meta.roomId, String(type), sourceId])).digest('hex') : crypto.randomUUID(),
+    id: crypto.randomUUID(),
     event: String(type),
     timestamp: new Date().toISOString(),
     roomId: meta.roomId || null,

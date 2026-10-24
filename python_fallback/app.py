@@ -5,7 +5,6 @@ from collections import deque
 import hmac
 import os
 import re
-import uuid
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -57,7 +56,6 @@ class Bridge:
         self.error = None
         self.seq = 0
         self.events = deque(maxlen=2000)
-        self.session_id = str(uuid.uuid4())
         self.lock = asyncio.Lock()
 
     def append(self, kind, data, generation):
@@ -90,7 +88,6 @@ class Bridge:
             self.username, self.room_id = username, ""
             self.seq = 0
             self.events.clear()
-            self.session_id = str(uuid.uuid4())
             self.status, self.error = "connecting", None
             ready = asyncio.get_running_loop().create_future()
             client = TikTokLiveClient(unique_id="@" + username)
@@ -157,13 +154,13 @@ class Bridge:
                 else:
                     ready.cancel()
                 raise HTTPException(status_code=502, detail=message[:500]) from exc
-            return {"ok": True, "status": "connected", "roomId": self.room_id, "cursor": 0, "sessionId": self.session_id}
+            return {"ok": True, "status": "connected", "roomId": self.room_id, "cursor": 0}
 
     def snapshot(self, after):
         items = [item for item in self.events if item["seq"] > after][:200]
         oldest = self.events[0]["seq"] if self.events else self.seq + 1
         return {"ok": True, "status": self.status, "error": self.error,
-                "roomId": self.room_id, "events": items, "latestSeq": self.seq, "sessionId": self.session_id,
+                "roomId": self.room_id, "events": items, "latestSeq": self.seq,
                 "dropped": after < oldest - 1}
 
 
