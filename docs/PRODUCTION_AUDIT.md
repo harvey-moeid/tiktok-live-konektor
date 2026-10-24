@@ -1,7 +1,5 @@
 # Audit backend dan frontend
 
-> Dokumen ini merekam audit 10 Oktober. Untuk status setelah perbaikan audit lanjutan, baca [perbaikan 18 Oktober](PRODUCTION_HARDENING_2026-10-18.md). Batas antrean memori yang disebut di bawah telah diganti dengan outbox SQLite persisten.
-
 Audit dilakukan 10 Oktober 2026. Perubahan telah divalidasi pada Node.js 24 dan Python 3.12. Status: perbaikan kode dan konfigurasi deployment tersedia; deployment publik dan penerimaan TikTok LIVE nyata belum diverifikasi.
 
 ## Temuan dan perbaikan

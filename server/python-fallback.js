@@ -27,7 +27,6 @@ export class PythonLiveFallback {
     this.generation = 0;
     this.roomId = '';
     this.username = '';
-    this.sessionId = null;
   }
 
   get enabled() { return !!this.config; }
@@ -69,8 +68,7 @@ export class PythonLiveFallback {
     });
     if (generation !== this.generation) throw Error('Python fallback dibatalkan.');
     if (result.status !== 'connected') throw Error('Python fallback belum berhasil tersambung.');
-    this.roomId = String(result.roomId || '');
-    this.sessionId = result.sessionId || null;
+    this.roomId = String(result.roomId || roomId || '');
     this.active = true;
     this.timer = setTimeout(() => { void this.poll(generation); }, 0);
     return { roomId: this.roomId };
@@ -82,33 +80,22 @@ export class PythonLiveFallback {
     try {
       const result = await this.request('/events?after=' + this.cursor, { timeoutMs: 8000 });
       if (!this.active || generation !== this.generation) return;
-      if (this.sessionId && result.sessionId !== this.sessionId) {
-        this.active = false;
-        this.setStatus('Error', 'Sesi Python berubah; koneksi perlu dipulihkan.');
-        return;
-      }
-      if (result.dropped) console.warn('[python-fallback] Event buffer overrun; some events were lost.');
-      const before = this.cursor;
-      for (const item of result.events || []) {
-        if (!this.active || generation !== this.generation) return;
-        if (!Number.isSafeInteger(item?.seq) || item.seq <= this.cursor) continue;
-        this.cursor = item.seq;
-        if (!['chat', 'like', 'gift', 'follow', 'share', 'member', 'viewer'].includes(item.event)) continue;
-        this.emitEvent(createEvent(item.event, item.data || {}, {
-          username: this.username, roomId: this.roomId || result.roomId || null,
-          sourceId: this.sessionId ? this.sessionId + ':' + item.seq : null
-        }));
-      }
-      const latest = Number(result.latestSeq);
-      if (Number.isSafeInteger(latest) && latest > this.cursor) {
-        if (this.cursor === before) throw Error('Python event cursor tidak bergerak meskipun masih ada backlog.');
-        delayMs = 0; // Drain every remaining batch, including after LIVE has ended.
-      } else if (result.status !== 'connected') {
+      if (result.status !== 'connected') {
         this.active = false;
         this.setStatus(result.status === 'error' ? 'Error' : 'Disconnected', result.error || null);
         return;
       }
+      if (result.dropped) console.warn('[python-fallback] Event buffer overrun; some events were lost.');
+      for (const item of result.events || []) {
+        if (!Number.isSafeInteger(item?.seq) || item.seq <= this.cursor) continue;
+        this.cursor = item.seq;
+        if (!['chat', 'like', 'gift', 'follow', 'share', 'member', 'viewer'].includes(item.event)) continue;
+        this.emitEvent(createEvent(item.event, item.data || {}, {
+          username: this.username, roomId: this.roomId || result.roomId || null
+        }));
+      }
       this.failures = 0;
+      if (Number(result.latestSeq) > this.cursor) delayMs = 0;
     } catch (err) {
       if (!this.active || generation !== this.generation) return;
       this.failures++;

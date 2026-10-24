@@ -1,5 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { api } from './api.js';
+import React, { useRef, useState } from 'react';
 import {
   MAX_WEBHOOKS, WEBHOOK_EVENT_OPTIONS, KNOWN_WEBHOOK_EVENTS,
   copyWebhookRows, parseCustomWebhookEvents, toggleWebhookEvent, validateWebhookRows
@@ -8,40 +7,7 @@ import {
 const persisted = source => copyWebhookRows(source);
 const editable = (hooks, prefix = 'loaded') => persisted(hooks).map((hook, i) => ({ ...hook, rowKey: prefix + i }));
 
-function DeliveryStatus({ active }) {
-  const [delivery, setDelivery] = useState(null), [error, setError] = useState(''), [retrying, setRetrying] = useState(false);
-  useEffect(() => {
-    if (!active) return;
-    let mounted = true, timer;
-    async function refresh() {
-      try { const value = await api('/api/webhooks/status'); if (mounted) { setDelivery(value); setError(''); } }
-      catch (e) { if (mounted) setError(e.message); }
-      if (mounted) timer = setTimeout(refresh, 10_000);
-    }
-    void refresh();
-    return () => { mounted = false; clearTimeout(timer); };
-  }, [active]);
-  async function retry() {
-    setRetrying(true); setError('');
-    try { await api('/api/webhooks/retry', { method: 'POST' }); setDelivery(await api('/api/webhooks/status')); }
-    catch (e) { setError(e.message); }
-    finally { setRetrying(false); }
-  }
-  return <div className="panel webhook-delivery-status">
-    <div><strong>Status pengiriman</strong>
-      <p role="status">{delivery ? `${delivery.pending} menunggu · ${delivery.failed} gagal` : 'Memuat status pengiriman…'}</p>
-      {!!delivery?.failed && <small>Pengiriman gagal tetap disimpan. Periksa penerima, lalu coba ulang.</small>}
-      {!!(delivery?.needsAttention || delivery?.paused) &&
-        <p role="alert">Periksa antrean dan penyimpanan, lalu pulihkan pengiriman. Event yang ditolak belum tersimpan dan tidak dapat dikirim ulang.</p>}
-      {error && <p role="alert">Status pengiriman tidak dapat dimuat: {error}</p>}
-    </div>
-    {!!(delivery?.failed || delivery?.needsAttention || delivery?.paused) && <button className="secondary" type="button" disabled={retrying} onClick={retry}>
-      {retrying ? 'Memproses…' : 'Pulihkan dan coba ulang pengiriman'}
-    </button>}
-  </div>;
-}
-
-export default function WebhookSettings({ initialHooks, onSave, signingEnabled = false, active = true }) {
+export default function WebhookSettings({ initialHooks, onSave, signingEnabled = false }) {
   const [saved, setSaved] = useState(() => persisted(initialHooks));
   const [rows, setRows] = useState(() => editable(initialHooks));
   const [customFields, setCustomFields] = useState({});
@@ -119,7 +85,6 @@ export default function WebhookSettings({ initialHooks, onSave, signingEnabled =
       </div>
     </div>
 
-    <DeliveryStatus active={active}/>
     <div className="webhook-security-note">
       <strong>Keamanan:</strong> {signingEnabled
         ? 'Signature HMAC aktif. Penerima harus memverifikasi signature, timestamp, dan ID event sebelum memproses reward.'

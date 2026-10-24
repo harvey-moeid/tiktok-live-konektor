@@ -8,7 +8,6 @@ import path from 'node:path';
 import { once } from 'node:events';
 import { io } from 'socket.io-client';
 import WebSocket from 'ws';
-import { WebhookOutbox } from '../server/webhook-outbox.js';
 
 test('production auth, API, Socket.IO, persistence, and graceful shutdown', { timeout: 30000 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'tlk-production-'));
@@ -18,7 +17,6 @@ test('production auth, API, Socket.IO, persistence, and graceful shutdown', { ti
     CONFIG_FILE: path.join(directory, 'config.json'), ADMIN_USERNAME: 'admin',
     ADMIN_PASSWORD: password, JWT_SECRET: crypto.randomBytes(32).toString('hex'),
     WS_TOKEN: crypto.randomBytes(32).toString('hex'), API_KEY: crypto.randomBytes(32).toString('hex'),
-    WEBHOOK_SIGNING_SECRET: crypto.randomBytes(32).toString('hex'),
     EULER_API_KEY: '', PYTHON_FALLBACK_URL: '', PYTHON_FALLBACK_HOSTNAME: '', PYTHON_FALLBACK_TOKEN: ''
   };
   let child;
@@ -68,10 +66,7 @@ test('production auth, API, Socket.IO, persistence, and graceful shutdown', { ti
   }
   await start();
   assert.equal((await (await request('/api/health')).json()).ok, true);
-  assert.equal((await request('/api/ready')).status, 200, 'stopped LIVE is intentionally ready');
   assert.equal((await request('/api/state')).status, 401);
-  assert.equal((await request('/api/webhooks/status')).status, 401);
-  assert.equal((await request('/api/webhooks/retry', { method: 'POST' })).status, 401);
   const foreign = await request('/api/auth/login', { method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}' });
   assert.equal(foreign.status, 403);
   const malformed = await request('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{' });
@@ -83,9 +78,6 @@ test('production auth, API, Socket.IO, persistence, and graceful shutdown', { ti
   assert.equal(publicStatus.headers.get('cache-control'), 'no-store');
 
   const cookie = await login();
-  assert.equal((await request('/api/webhooks/status', { headers: { cookie } })).status, 200);
-  assert.deepEqual(await (await request('/api/webhooks/retry', { method: 'POST', headers: { cookie } })).json(), { ok: true, retried: 0 });
-  assert.equal((await request('/api/webhooks/retry', { method: 'POST', headers: { cookie, origin: 'https://evil.example' } })).status, 403);
   const socket = await connect(cookie);
   const forbidden = await request('/api/config', { method: 'PUT', headers: { cookie, origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}' });
   assert.equal(forbidden.status, 403);
@@ -122,22 +114,5 @@ test('production auth, API, Socket.IO, persistence, and graceful shutdown', { ti
   assert.equal((await request('/api/state', { headers: { cookie: survivingCookie } })).status, 401);
   const newCookie = await login(newPassword);
   assert.equal((await request('/api/state', { headers: { cookie: newCookie } })).status, 200);
-  const hooks = [{ url: 'https://example.com/audit-hook', enabled: true, events: ['gift'] }];
-  assert.equal((await request('/api/webhooks', { method: 'PUT', headers: { cookie: newCookie, 'content-type': 'application/json' }, body: JSON.stringify({ webhooks: hooks }) })).status, 200);
-  await stop();
-  // Seed a failed durable job with a fake transport while the service is stopped.
-  // No webhook is sent to example.com: failed jobs only replay on operator action.
-  const box = new WebhookOutbox({ file: path.join(directory, 'webhook-outbox.sqlite'), autoStart: false,
-    maxAttempts: 1, deliver: async () => { throw Error('offline'); } });
-  box.enqueue({ id: 'failed-integration', version: 1 }, '{"id":"failed-integration"}', hooks.map(x => x.url));
-  box.start();
-  while (!box.snapshot().failed) await new Promise(resolve => setTimeout(resolve, 5));
-  await box.close(); await start();
-  const deliveryStatus = await (await request('/api/webhooks/status', { headers: { cookie: newCookie } })).json();
-  assert.equal(deliveryStatus.failed, 1, 'failed delivery survives real server restart');
-  assert.equal((await request('/api/health')).status, 200, 'delivery failure does not fail liveness');
-  assert.equal((await request('/api/ready')).status, 503, 'delivery failure is visible to monitoring');
-  await request('/api/webhooks', { method: 'PUT', headers: { cookie: newCookie, 'content-type': 'application/json' }, body: '{"webhooks":[]}' });
-  assert.equal((await request('/api/ready')).status, 200);
   await stop();
 });

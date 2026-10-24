@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { ManagedLiveConnection, normalizeManagedMessage, extractManagedMessages, managedCloseReason, managedCloseDiagnostic } from '../server/managed-live.js';
+import { ManagedLiveConnection, normalizeManagedMessage, extractManagedMessages, managedCloseReason } from '../server/managed-live.js';
 
 const fake = () => {
   const socket = new EventEmitter();
@@ -141,7 +141,7 @@ test('tiktok.connect only proves gateway transport, not active LIVE', async () =
   const pending = instance.start('some_live');
   socket.emit('open');
   socket.emit('message', JSON.stringify({ type: 'tiktok.connect', data: { agentId: 'abc' } }));
-  await assert.rejects(pending, /bukan konfirmasi LIVE/);
+  await assert.rejects(pending, /tidak menemukan status atau event LIVE/);
 });
 
 test('timeout distinguishes a socket with no data from an unopened transport', async () => {
@@ -163,25 +163,4 @@ test('handles legacy single-message event envelope without leaking the raw frame
   assert.equal(frames.length, 1);
   assert.equal(normalizeManagedMessage(frames[0].type, frames[0].data).data.giftName, 'Rose');
   assert.deepEqual(extractManagedMessages('x'.repeat(256 * 1024 + 1)), []);
-});
-
-test('workerInfo alone is only gateway metadata, not proof of LIVE', async () => {
-  const socket = fake();
-  const { instance, events } = bridge(socket, { timeoutMs: 16 });
-  const pending = instance.start('some_live');
-  socket.emit('open');
-  socket.emit('message', JSON.stringify({ type: 'workerInfo', data: { schemaVersion: 2 } }));
-  await assert.rejects(pending, /workerInfo.*bukan konfirmasi LIVE/);
-  assert.equal(instance.connected, false);
-  assert.equal(events.length, 0);
-});
-
-test('managed close diagnostics classify provider codes without exposing close reason or credentials', () => {
-  const data = managedCloseDiagnostic(4404, { liveConfirmed: false, framesReceived: 1, kinds: ['workerInfo'] });
-  assert.deepEqual(data, { code: 4404, category: 'not_live', liveConfirmed: false, framesReceived: 1, kinds: ['workerInfo'] });
-  assert.equal(managedCloseDiagnostic(4403).category, 'permission_denied');
-  assert.equal(managedCloseDiagnostic(4401).category, 'invalid_auth');
-  assert.equal(managedCloseDiagnostic(4429).category, 'too_many_connections');
-  assert.equal(managedCloseDiagnostic(4557).category, 'room_info_fetch_failed');
-  assert.deepEqual(managedCloseDiagnostic(1006, { kinds: ['workerInfo', 'unsafe key=secret'] }).kinds, ['workerInfo']);
 });

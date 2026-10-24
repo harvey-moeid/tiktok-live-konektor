@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
 import { createWebSocketUrl } from '@eulerstream/euler-websocket-sdk';
-import { createEvent, sourceMessageId } from './events.js';
+import { createEvent } from './events.js';
 import { normalizeGiftData } from './gifts.js';
 
 const STREAM_TYPES = new Set(['chat', 'like', 'gift', 'follow', 'share', 'member', 'viewer']);
@@ -45,7 +45,7 @@ export function normalizeManagedMessage(type, data, giftNames = new Map()) {
     case 'share':
       return { event: 'share', data: person };
     case 'social': {
-      const action = String(pick(data.displayType, data.action, data.socialType, data.common?.displayText?.key, '')).toLowerCase();
+      const action = String(pick(data.displayType, data.action, data.socialType, '')).toLowerCase();
       if (action.includes('follow')) return { event: 'follow', data: person };
       if (action.includes('share')) return { event: 'share', data: person };
       return null;
@@ -110,24 +110,6 @@ const CLOSED = new Map([
 
 export function managedCloseReason(code, reason = '') {
   return CLOSED.get(Number(code)) || String(reason || ('Koneksi Cloud WebSocket ditutup (kode ' + code + ')')).slice(0, 250);
-}
-
-// Log only non-sensitive connection metadata. Do not log WebSocket URL,
-// raw gateway payloads, close reason (provider-controlled), or API credentials.
-export function managedCloseDiagnostic(code, { liveConfirmed = false, framesReceived = 0, kinds = [] } = {}) {
-  const numeric = Number(code);
-  const safeCode = Number.isInteger(numeric) ? numeric : 0;
-  const category = new Map([
-    [4401, 'invalid_auth'], [4403, 'permission_denied'],
-    [4404, 'not_live'], [4429, 'too_many_connections'],
-    [4556, 'webcast_fetch_failed'], [4557, 'room_info_fetch_failed'],
-    [4005, 'stream_ended'], [4006, 'message_timeout']
-  ]).get(safeCode) || 'other';
-  return {
-    code: safeCode, category, liveConfirmed: Boolean(liveConfirmed),
-    framesReceived: Number.isSafeInteger(framesReceived) ? framesReceived : 0,
-    kinds: safeMessageKinds((Array.isArray(kinds) ? kinds : []).map(type => ({ type })))
-  };
 }
 
 export class ManagedLiveConnection {
@@ -208,9 +190,7 @@ export class ManagedLiveConnection {
           ? 'Gateway Eulerstream tidak berhasil membuka koneksi WebSocket.'
           : !framesReceived
             ? 'WebSocket Eulerstream terbuka tetapi tidak menerima pesan LIVE.'
-            : kinds.size && [...kinds].every(kind => /^(workerInfo|tiktok[._]connect)$/i.test(kind))
-              ? 'Gateway Eulerstream hanya mengirim metadata workerInfo/tiktok.connect, bukan konfirmasi LIVE.'
-              : 'WebSocket Eulerstream menerima pesan, tetapi tidak menemukan status atau event LIVE yang valid.';
+            : 'WebSocket Eulerstream menerima pesan, tetapi tidak menemukan status atau event LIVE yang valid.';
         console.warn('[managed-ws] Handshake diagnostic', JSON.stringify({
           opened: socketOpened, framesReceived, framesParsed, kinds: [...kinds]
         }));
@@ -268,12 +248,8 @@ export class ManagedLiveConnection {
           // An actual webcast event is stronger proof of an active LIVE session
           // than a transport-level WebSocket 'open' or gateway 'tiktok.connect'.
           if (!this.connected) markConnected(roomIdOf(data));
-          const upstreamId = sourceMessageId(data.common?.msgId, data.msgId, data.messageId);
           const item = createEvent(normalized.event, normalized.data, {
-            username: clean, roomId: this.roomId,
-            sourceId: upstreamId && (normalized.event === 'gift'
-              ? JSON.stringify([String(upstreamId), normalized.data.repeatCount, normalized.data.repeatEnd])
-              : String(upstreamId))
+            username: clean, roomId: this.roomId
           });
           // Buffer until the controller has announced stream started. Async
           // microtask ordering is insufficient across nested await/then chains.
@@ -293,10 +269,6 @@ export class ManagedLiveConnection {
         const wasConnected = this.connected;
         this.active = false;
         this.connected = false;
-        const diagnostic = managedCloseDiagnostic(code, {
-          liveConfirmed: wasConnected, framesReceived, kinds: [...kinds]
-        });
-        console.warn('[managed-ws] Connection closed @' + clean, JSON.stringify(diagnostic));
         const msg = managedCloseReason(code, Buffer.isBuffer(rawReason) ? rawReason.toString('utf8') : rawReason);
         if (!settled) finish(Error(msg));
         else if (wasConnected) this.setStatus(code === 4005 || code === 1000 || code === 4404 ? 'Disconnected' : 'Error', msg);

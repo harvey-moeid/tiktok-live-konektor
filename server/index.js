@@ -8,13 +8,12 @@ import rateLimit from 'express-rate-limit';
 import { Server as SocketIO } from 'socket.io';
 import { getConfig, getSafeConfig, updateConfig } from './config.js';
 import { login, verify, setPassword, revokeSession } from './auth.js';
-import { dispatchWebhook, normalizeWebhooks, initializeWebhooks, reconcileWebhooks, webhookStatus, retryWebhooks, closeWebhooks } from './webhooks.js';
+import { dispatchWebhook, normalizeWebhooks } from './webhooks.js';
 import { attachExternalWs, closeExternalWs } from './ws.js';
 import { TikTokService } from './tiktok.js';
 import { ManagedLiveConnection } from './managed-live.js';
-import { LiveController } from './live-controller.js';
-import { LiveStats } from './stats.js';
-import { normalizeEvent } from './events.js';
+import { isEulerBusinessPlanError } from './signing-error.js';
+import { normalizeEvent, createEvent } from './events.js';
 import { removeHistoryEvent } from './history.js';
 import { broadcast } from './ws.js';
 import { PythonLiveFallback } from './python-fallback.js';
@@ -45,8 +44,7 @@ app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'
 for (const route of ['/api/auth', '/api/config', '/api/webhooks', '/api/events', '/api/live', '/api/state']) {
   app.use(route, protectAdminOrigin);
 }
-app.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true, legacyHeaders: false,
-  skip: req => ['/api/health', '/api/ready'].includes(req.path) }));
+app.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: true, legacyHeaders: false }));
 const loginLimiter = rateLimit({
   windowMs: 15 * 60_000,
   limit: 10,
@@ -56,17 +54,17 @@ const loginLimiter = rateLimit({
   message: { error: 'Terlalu banyak percobaan login. Coba lagi beberapa saat.' }
 });
 
-const stats = new LiveStats();
-let live;
-let shuttingDown = false;
 const state = {
   status: 'Disconnected',
   error: null,
   roomId: null,
   lastEventAt: null,
   events: [],
-  stats: stats.value
+  stats: { chat: 0, gifts: 0, giftCoins: 0, likes: 0, follows: 0, peakViewers: 0, viewerCount: 0, topGifter: [] }
 };
+const giftStreaks = new Map();
+let operation = Promise.resolve();
+let activeEngine = 'none';
 
 function auth(req, res, next) {
   try { req.user = verify(req.cookies.tlk_session); next(); }
@@ -74,17 +72,44 @@ function auth(req, res, next) {
 }
 function safe() {
   const { events: _events, ...snapshot } = state;
-  const session = live?.snapshot() || { engine: 'none', running: false };
   return {
-    ...snapshot, ...session,
-    username: session.desiredRunning ? session.username : getConfig().tiktokUsername,
+    ...snapshot,
+    username: getConfig().tiktokUsername,
+    roomId: state.roomId || getConfig().tiktokRoomId || null,
+    engine: activeEngine,
     pythonFallbackAvailable: python.enabled,
-    managedWebSocketAvailable: managed.enabled
+    managedWebSocketAvailable: managed.enabled,
+    running: ['Connected', 'Connecting...'].includes(state.status)
   };
 }
-function envNumber(name, fallback, min, max) {
-  const n = Number(process.env[name] ?? fallback);
-  return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.trunc(n))) : fallback;
+function setStatus(status, error = null) {
+  state.status = status;
+  state.error = error ? redactText(error) : null;
+  io.emit('status', safe());
+}
+function resetStats() {
+  state.stats = { chat: 0, gifts: 0, giftCoins: 0, likes: 0, follows: 0, peakViewers: 0, viewerCount: 0, topGifter: [] };
+  giftStreaks.clear();
+}
+function addGift(d) {
+  const username = String(d.username || 'unknown');
+  // Use the stable gift ID for streak accounting. A late metadata lookup can
+  // replace a placeholder name mid-streak without creating a second streak.
+  const giftKey = String(d.giftId || d.giftName || 'Unknown');
+  const key = username + '|' + giftKey;
+  const repeatCount = Math.max(Number(d.repeatCount) || 1, 1);
+  const previous = giftStreaks.get(key) || 0;
+  const delta = Math.max(repeatCount - previous, 0);
+  giftStreaks.set(key, repeatCount);
+  if (d.repeatEnd) giftStreaks.delete(key);
+  const unitCoins = Number(d.diamondCount) || Number(d.totalValue) / repeatCount || 0;
+  state.stats.gifts += delta;
+  state.stats.giftCoins += unitCoins * delta;
+  let top = state.stats.topGifter.find(x => x.username === username);
+  if (top) top.coins += unitCoins * delta;
+  else state.stats.topGifter.push({ username, coins: unitCoins * delta });
+  state.stats.topGifter.sort((a, b) => b.coins - a.coins);
+  state.stats.topGifter = state.stats.topGifter.slice(0, 10);
 }
 function handle(event) {
   let p;
@@ -96,58 +121,66 @@ function handle(event) {
   if (!p || typeof p !== 'object') return;
   if (p.roomId) state.roomId = p.roomId;
   state.lastEventAt = p.timestamp || new Date().toISOString();
-  state.stats = stats.consume(p);
+  if (p.event === 'stream' && p.data?.state === 'started') resetStats();
+  if (p.event === 'stream' && p.data?.state === 'ended') state.roomId = null;
+  if (p.event === 'chat') state.stats.chat++;
+  if (p.event === 'gift') addGift(p.data || {});
+  if (p.event === 'like') state.stats.likes += Math.max(Number(p.data?.likeCount) || 1, 1);
+  if (p.event === 'follow') state.stats.follows++;
+  if (p.event === 'viewer') {
+    state.stats.viewerCount = Number(p.data?.viewerCount) || 0;
+    state.stats.peakViewers = Math.max(state.stats.peakViewers, state.stats.viewerCount);
+  }
   state.events.push(p);
   const maxEvents = Math.min(Math.max(Number(getConfig().maxFeedEvents || 500), 50), 2000);
   state.events = state.events.slice(-maxEvents);
   io.emit('event', p);
   io.emit('stats', state.stats);
-  broadcast(p);
-  void dispatchWebhook(p, getConfig().webhooks).catch(error => {
-    console.error('[webhook] Event not queued:', p.id, error.code || 'outbox_error');
-  });
+  void dispatchWebhook(p, getConfig().webhooks);
 }
 
-const tiktok = new TikTokService({
-  emitEvent: event => live.onEngineEvent('node', event),
-  setStatus: (status, error) => live.onEngineStatus('node', status, error)
-});
+const tiktok = new TikTokService({ emitEvent: handle, setStatus });
 const managed = new ManagedLiveConnection({
-  emitEvent: event => live.onEngineEvent('managed', event),
-  setStatus: (status, error) => live.onEngineStatus('managed', status, error)
-});
-const python = new PythonLiveFallback({
-  emitEvent: event => live.onEngineEvent('python', event),
-  setStatus: (status, error) => live.onEngineStatus('python', status, error)
-});
-live = new LiveController({
-  engines: { node: tiktok, managed, python }, emitEvent: handle,
-  desired: getConfig().liveDesired,
-  autoReconnect: !/^(0|false|no|off)$/i.test(process.env.LIVE_AUTO_RECONNECT || ''),
-  baseDelayMs: envNumber('LIVE_RECONNECT_BASE_MS', 2000, 500, 60_000),
-  maxDelayMs: envNumber('LIVE_RECONNECT_MAX_MS', 60_000, 2000, 300_000),
-  recoveryIntervalMs: envNumber('LIVE_RECOVERY_INTERVAL_MS', 300_000, 0, 86_400_000),
-  maxAttempts: envNumber('LIVE_RECONNECT_ATTEMPTS', 10, 0, 100),
-  persistDesired: desired => updateConfig({ liveDesired: desired,
-    ...(desired.running ? { tiktokUsername: desired.username, tiktokRoomId: desired.roomId } : {}) }),
-  onStatus: snapshot => {
-    state.status = snapshot.status; state.error = snapshot.error;
-    io.emit('status', safe());
+  emitEvent: event => {
+    if (activeEngine !== 'managed') return;
+    handle(event);
+    broadcast(event);
+  },
+  setStatus: (status, error) => {
+    if (activeEngine !== 'managed') return;
+    setStatus(status, error);
+    if (status === 'Disconnected' || status === 'Error') {
+      const ended = createEvent('stream', { state: 'ended' }, {
+        username: getConfig().tiktokUsername, roomId: state.roomId
+      });
+      handle(ended);
+      broadcast(ended);
+      activeEngine = 'none';
+    }
   }
 });
-initializeWebhooks(getConfig().webhooks);
+const python = new PythonLiveFallback({
+  emitEvent: event => {
+    if (activeEngine !== 'python') return;
+    handle(event);
+    broadcast(event);
+  },
+  setStatus: (status, error) => {
+    if (activeEngine !== 'python') return;
+    setStatus(status, error);
+    if (status !== 'Connected') {
+      const ended = createEvent('stream', { state: 'ended' }, {
+        username: getConfig().tiktokUsername, roomId: state.roomId
+      });
+      handle(ended);
+      broadcast(ended);
+      activeEngine = 'none';
+    }
+  }
+});
 attachExternalWs(server, () => [process.env.API_KEY || '', getConfig().wsToken], isAllowedWsOrigin);
 
-app.get('/api/health', (_, res) => res.status(shuttingDown ? 503 : 200).json({ ok: !shuttingDown, status: state.status, engine: live.engine }));
-app.get('/api/ready', (_, res) => {
-  const delivery = webhookStatus();
-  const session = live.snapshot();
-  const ready = !shuttingDown && (!session.desiredRunning || session.status === 'Connected') &&
-    !delivery.paused && !delivery.failed && !delivery.needsAttention;
-  res.status(ready ? 200 : 503).json({ ok: ready, liveExpected: session.desiredRunning,
-    liveConnected: session.status === 'Connected', recoveryExhausted: session.recoveryExhausted,
-    webhookPending: delivery.pending, webhookFailed: delivery.failed });
-});
+app.get('/api/health', (_, res) => res.json({ ok: true, status: state.status, engine: activeEngine }));
 
 // External read-only API for other applications.
 app.use('/api/v1', externalCors);
@@ -161,10 +194,6 @@ app.get('/api/v1/status', apiAuth, (req, res) => {
     pythonFallbackAvailable: snapshot.pythonFallbackAvailable,
     managedWebSocketAvailable: snapshot.managedWebSocketAvailable,
     running: snapshot.running,
-    desiredRunning: snapshot.desiredRunning,
-    reconnectAttempts: snapshot.reconnectAttempts,
-    nextRetryAt: snapshot.nextRetryAt,
-    recoveryExhausted: snapshot.recoveryExhausted,
     username: snapshot.username,
     roomId: snapshot.roomId,
     lastEventAt: state.lastEventAt,
@@ -190,8 +219,8 @@ app.get('/api/v1/events', apiAuth, (req, res) => {
 });
 app.get('/api/v1/stats', apiAuth, (req, res) => res.json({
   ok: true,
-  username: safe().username,
-  roomId: live.roomId,
+  username: getConfig().tiktokUsername,
+  roomId: state.roomId || getConfig().tiktokRoomId || null,
   stats: state.stats
 }));
 app.post('/api/auth/login', loginLimiter, async (req, res) => {
@@ -228,8 +257,6 @@ app.delete('/api/events', auth, (_, res) => {
 });
 // Webhook-specific admin endpoint avoids overwriting LIVE username/room settings
 // when destinations are edited independently in the dashboard.
-app.get('/api/webhooks/status', auth, (_, res) => res.json(webhookStatus()));
-app.post('/api/webhooks/retry', auth, (_, res) => res.json({ ok: true, retried: retryWebhooks() }));
 app.put('/api/webhooks', auth, (req, res) => {
   if (!Array.isArray(req.body?.webhooks)) return res.status(400).json({ error: 'Daftar webhook harus berupa array.' });
   let webhooks;
@@ -239,7 +266,6 @@ app.put('/api/webhooks', auth, (req, res) => {
     return res.status(400).json({ error: error.message });
   }
   updateConfig({ webhooks });
-  reconcileWebhooks(webhooks);
   return res.json({ ok: true, webhooks });
 });
 app.put('/api/config', auth, (req, res) => {
@@ -254,7 +280,6 @@ app.put('/api/config', auth, (req, res) => {
     catch (e) { return res.status(400).json({ error: e.message }); }
   }
   updateConfig({ tiktokUsername: username, tiktokRoomId: roomId, webhooks });
-  reconcileWebhooks(webhooks);
   return res.json(getSafeConfig());
 });
 app.post('/api/auth/password', auth, async (req, res) => {
@@ -267,17 +292,105 @@ app.post('/api/auth/password', auth, async (req, res) => {
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/live/start', auth, async (req, res) => {
-  const body = req.body || {};
-  const username = String(Object.hasOwn(body, 'username') ? body.username || '' : getConfig().tiktokUsername || '').replace(/^@/, '').trim();
-  const roomId = String(Object.hasOwn(body, 'roomId') ? body.roomId || '' : getConfig().tiktokRoomId || '').trim();
+  const username = String(req.body?.username || getConfig().tiktokUsername || '').replace(/^@/, '').trim();
+  const roomId = String(req.body?.roomId || getConfig().tiktokRoomId || '').trim();
   if (!username || !/^[A-Za-z0-9._-]{1,64}$/.test(username)) return res.status(400).json({ error: 'Username TikTok tidak valid.' });
   if (roomId && !/^\d{5,30}$/.test(roomId)) return res.status(400).json({ error: 'Room ID TikTok harus berupa angka.' });
-  try { await live.start(username, roomId); res.json(safe()); }
-  catch (e) { res.status(e.status === 409 ? 409 : 502).json({ error: redactText(e.message || 'LIVE connection failed').slice(0, 750) }); }
+  const run = operation.then(async () => {
+    if (['Connecting...', 'Connected', 'Stopping'].includes(state.status)) throw Error('LIVE sedang berjalan atau sedang diproses.');
+    updateConfig({ tiktokUsername: username, tiktokRoomId: roomId });
+    try {
+      await tiktok.start(username, roomId);
+      activeEngine = 'node';
+      io.emit('status', safe());
+      return safe();
+    } catch (nativeError) {
+      let managedError = null;
+      // A Community key cannot invoke the Business-only signature endpoint,
+      // but can authenticate the independently hosted Cloud WebSocket service.
+      if (managed.enabled && isEulerBusinessPlanError(nativeError)) {
+        console.warn('[live] Node signing is Business-only; trying Community Cloud WebSocket.');
+        activeEngine = 'managed';
+        state.roomId = null;
+        setStatus('Connecting...');
+        try {
+          const connected = await managed.start(username);
+          state.roomId = connected.roomId || null;
+          const started = createEvent('stream', { state: 'started', username }, {
+            username, roomId: state.roomId
+          });
+          handle(started);
+          broadcast(started);
+          setStatus('Connected');
+          managed.flushPendingEvents();
+          return safe();
+        } catch (error) {
+          managedError = error;
+          console.warn('[live] Managed Cloud WebSocket unavailable:', error.message);
+        }
+      }
+      if (!python.enabled) {
+        activeEngine = 'none';
+        if (!managedError) throw nativeError;
+        const combined = Error('Node: ' + String(nativeError.message || 'failed').slice(0, 250) +
+          ' | Cloud WS: ' + String(managedError.message || 'failed').slice(0, 250));
+        setStatus('Error', combined.message);
+        throw combined;
+      }
+      console.warn('[live] Trying Python fallback after Node / managed failure.');
+      activeEngine = 'python';
+      state.roomId = null;
+      setStatus('Connecting...');
+      try {
+        const connected = await python.start(username, roomId);
+        state.roomId = connected.roomId || null;
+        const started = createEvent('stream', { state: 'started', username }, {
+          username, roomId: state.roomId
+        });
+        handle(started);
+        broadcast(started);
+        setStatus('Connected');
+        return safe();
+      } catch (pythonError) {
+        activeEngine = 'none';
+        const combined = new Error(
+          'Node: ' + String(nativeError.message || 'failed').slice(0, 250) +
+          (managedError ? ' | Cloud WS: ' + String(managedError.message || 'failed').slice(0, 250) : '') +
+          ' | Python: ' + String(pythonError.message || 'failed').slice(0, 250)
+        );
+        setStatus('Error', combined.message);
+        throw combined;
+      }
+    }
+  });
+  operation = run.catch(() => undefined);
+  try { res.json(await run); }
+  catch (e) { res.status(502).json({ error: redactText(e.message || 'LIVE connection failed').slice(0, 750) }); }
 });
 app.post('/api/live/stop', auth, async (_, res) => {
-  try { await live.stop(); res.json(safe()); }
-  catch (e) { res.status(500).json({ error: redactText(e.message) }); }
+  const run = operation.then(async () => {
+    if (state.status === 'Disconnected') return safe();
+    setStatus('Stopping');
+    if (activeEngine === 'managed') {
+      await managed.stop();
+      const ended = createEvent('stream', { state: 'ended' }, { username: getConfig().tiktokUsername, roomId: state.roomId });
+      handle(ended);
+      broadcast(ended);
+    } else if (activeEngine === 'python') {
+      await python.stop();
+      const ended = createEvent('stream', { state: 'ended' }, { username: getConfig().tiktokUsername, roomId: state.roomId });
+      handle(ended);
+      broadcast(ended);
+    } else {
+      await tiktok.stop();
+    }
+    activeEngine = 'none';
+    state.roomId = null;
+    setStatus('Disconnected');
+    return safe();
+  });
+  operation = run.catch(() => undefined);
+  try { res.json(await run); } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 io.use((socket, next) => {
@@ -310,25 +423,22 @@ app.use((error, _req, res, _next) => {
 });
 
 const port = Number(process.env.PORT || 10000);
-server.listen(port, '0.0.0.0', () => {
-  console.log(`TikTok Live Konektor listening on ${server.address().port}`);
-  void live.resume().catch(error => console.warn('[live] Startup recovery:', redactText(error.message)));
-});
+server.listen(port, '0.0.0.0', () => console.log(`TikTok Live Konektor listening on ${server.address().port}`));
+
+let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`[shutdown] ${signal}`);
-  const timer = setTimeout(() => process.exit(1), 25_000);
+  const timer = setTimeout(() => process.exit(1), 10_000);
   timer.unref();
   clearInterval(sessionCheck);
   closeExternalWs();
   io.disconnectSockets(true);
-  const closed = new Promise(resolve => server.close(resolve));
-  try { await live.stop({ shutdown: true }); } catch (e) { console.warn('[shutdown]', redactText(e.message)); }
-  await closeWebhooks();
-  await closed;
-  clearTimeout(timer);
-  process.exit(0);
+  try { await managed.stop(); } catch (e) { console.warn('[shutdown] Managed disconnect failed:', e?.message || String(e)); }
+  try { await python.stop(); } catch (e) { console.warn('[shutdown] Python disconnect failed:', e?.message || String(e)); }
+  try { await tiktok.stop(); } catch (e) { console.warn('[shutdown] TikTok disconnect failed:', e?.message || String(e)); }
+  server.close(() => process.exit(0));
 }
 process.once('SIGTERM', () => { void shutdown('SIGTERM'); });
 process.once('SIGINT', () => { void shutdown('SIGINT'); });
